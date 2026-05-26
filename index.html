@@ -1079,8 +1079,8 @@
   let annoTextEdit = null;          // {i, isNew} when inline-editing a label
   let annoHist = [], annoHistIdx = -1;
   let annoDispW = 0, annoDispH = 0, annoDPR = 1;
-  let annoImgRect = { x: 0, y: 0, w: 0, h: 0 };   // image position within the (larger) canvas
-  let annoMargin = 0.3;                            // editable space around the image (image-relative)
+  let annoImgRect = { x: 0, y: 0, w: 0, h: 0 };   // image's on-screen rect (the pan/zoom transform)
+  let annoSpace = false;                           // space held → temporary pan mode
 
   const cloneAnns = (arr) => arr.map((a) => ({ ...a }));
   const selArr = () => [...annoSel];
@@ -1303,6 +1303,10 @@
   function onAnnoDown(e) {
     e.preventDefault(); try { modalEls.canvas.setPointerCapture(e.pointerId); } catch (_) {}
     if (annoTextEdit) commitTextEdit();
+    if (annoSpace || e.button === 1) {   // pan the plane
+      annoAction = { kind: "pan", sx: e.clientX, sy: e.clientY, ox: annoImgRect.x, oy: annoImgRect.y };
+      modalEls.canvas.style.cursor = "grabbing"; return;
+    }
     const { dx, dy } = evtPos(e), nx = D2NX(dx), ny = D2NY(dy);
     if (annoTool === "select") {
       for (const hd of selHandles()) { if (Math.hypot(dx - hd.x, dy - hd.y) <= 12) { startHandle(hd, nx, ny); return; } }
@@ -1331,6 +1335,7 @@
   }
   function onAnnoMove(e) {
     if (!annoAction) return;
+    if (annoAction.kind === "pan") { annoImgRect.x = annoAction.ox + (e.clientX - annoAction.sx); annoImgRect.y = annoAction.oy + (e.clientY - annoAction.sy); redraw(); return; }
     const { dx, dy } = evtPos(e), nx = D2NX(dx), ny = D2NY(dy), A = annoAction;
     if (A.kind === "draw") {
       const d = annoDraft;
@@ -1366,6 +1371,7 @@
   }
   function onAnnoUp() {
     const A = annoAction; if (!A) return; annoAction = null;
+    if (A.kind === "pan") { modalEls.canvas.style.cursor = annoSpace ? "grab" : ""; return; }
     if (A.kind === "draw") {
       const d = annoDraft; annoDraft = null;
       const ok = d.type === "box" ? (d.w > 0.01 && d.h > 0.01) : (Math.hypot(d.x2 - d.x1, d.y2 - d.y1) > 0.015);
@@ -1407,11 +1413,12 @@
     const redoBtn = h("button", { class: "tool", title: "Redo", onclick: redo }, "↷ Redo", h("span", { class: "kbd" }, "⌘⇧Z"));
     const delBtn = h("button", { class: "tool", title: "Delete selected", onclick: deleteSel }, "🗑 Delete", h("span", { class: "kbd" }, "Del"));
     const clrBtn = h("button", { class: "tool", onclick: clearAnno }, "Clear all");
-    const moreBtn = h("button", { class: "tool", title: "More space around the image", onclick: () => expandArea(0.4) }, "⤢ +space");
-    const lessBtn = h("button", { class: "tool", title: "Less space around the image", onclick: () => expandArea(-0.4) }, "− space");
-    toolbar.append(undoBtn, redoBtn, delBtn, clrBtn, h("span", { class: "sep" }), moreBtn, lessBtn);
+    const zoomOutBtn = h("button", { class: "tool", title: "Zoom out", onclick: () => zoomBy(1 / 1.25) }, "−");
+    const fitBtn = h("button", { class: "tool", title: "Fit image to view", onclick: () => { fitView(); redraw(); } }, "⤢ Fit");
+    const zoomInBtn = h("button", { class: "tool", title: "Zoom in", onclick: () => zoomBy(1.25) }, "+");
+    toolbar.append(undoBtn, redoBtn, delBtn, clrBtn, h("span", { class: "sep" }), zoomOutBtn, fitBtn, zoomInBtn);
     const foot = h("div", { class: "modal-foot" },
-      h("span", { class: "modal-hint" }, "drag to draw or box-select · drag handles to link arrows/labels · double-click a label to edit (Enter = new line, ⌘↵ done)"),
+      h("span", { class: "modal-hint" }, "scroll to pan · ⌃scroll / pinch to zoom · space-drag to pan · drag to draw or box-select · double-click a label to edit"),
       h("div", { style: "display:flex;gap:8px" },
         h("button", { onclick: () => closeAnnotator(false) }, "Cancel"),
         h("button", { class: "primary", onclick: () => closeAnnotator(true) }, "Done"),
@@ -1423,6 +1430,7 @@
     canvas.addEventListener("pointerdown", onAnnoDown);
     canvas.addEventListener("pointermove", onAnnoMove);
     canvas.addEventListener("pointerup", onAnnoUp);
+    canvas.addEventListener("wheel", onAnnoWheel, { passive: false });
     canvas.addEventListener("dblclick", (e) => {
       if (annoTool !== "select") return;
       const { dx, dy } = evtPos(e);
@@ -1432,30 +1440,46 @@
     return modalEls;
   }
 
-  // size the editor canvas = image plus `annoMargin` of editable space (and any out-of-image marks)
-  function layoutModalCanvas() {
-    const slot = annoSlot, m = modalEls, M = annoMargin, ext = annsExtent(annoWork);
-    const x0 = Math.min(ext.x0, 0) - M, y0 = Math.min(ext.y0, 0) - M, x1 = Math.max(ext.x1, 1) + M, y1 = Math.max(ext.y1, 1) + M;
-    const regWu = x1 - x0, regHu = y1 - y0;
-    const maxW = Math.min(window.innerWidth - 80, 1100), maxH = window.innerHeight * 0.6;
-    const s = Math.min(maxW / (regWu * slot.w), maxH / (regHu * slot.h));
-    annoDispW = Math.round(regWu * slot.w * s); annoDispH = Math.round(regHu * slot.h * s);
-    annoImgRect = { x: (0 - x0) * slot.w * s, y: (0 - y0) * slot.h * s, w: slot.w * s, h: slot.h * s };
+  // The editor is a fixed-size viewport onto an infinite plane. annoImgRect is the image's
+  // on-screen rect, so panning translates it and zooming scales it about a point. Annotations
+  // (normalized to the image) map through annoImgRect, so they pan/zoom with it for free.
+  function setViewport() {
+    const m = modalEls;
+    annoDispW = Math.round(Math.min(window.innerWidth - 80, 1100));
+    annoDispH = Math.round(window.innerHeight * 0.62);
     annoDPR = window.devicePixelRatio || 1;
     m.canvas.width = annoDispW * annoDPR; m.canvas.height = annoDispH * annoDPR;
     m.canvas.style.width = annoDispW + "px"; m.canvas.style.height = annoDispH + "px";
   }
-  function expandArea(d) { annoMargin = Math.max(0.1, annoMargin + d); layoutModalCanvas(); redraw(); }
+  function fitView() {
+    const s = Math.min(annoDispW / annoSlot.w, annoDispH / annoSlot.h) * 0.7;   // 70% leaves room to draw outside
+    const w = annoSlot.w * s, h = annoSlot.h * s;
+    annoImgRect = { x: (annoDispW - w) / 2, y: (annoDispH - h) / 2, w, h };
+  }
+  function zoomAt(cx, cy, f) {
+    const nw = Math.max(60, Math.min(40000, annoImgRect.w * f)), rf = nw / annoImgRect.w;
+    const nx = (cx - annoImgRect.x) / annoImgRect.w, ny = (cy - annoImgRect.y) / annoImgRect.h;
+    annoImgRect.w *= rf; annoImgRect.h *= rf;
+    annoImgRect.x = cx - nx * annoImgRect.w; annoImgRect.y = cy - ny * annoImgRect.h;
+  }
+  function zoomBy(f) { zoomAt(annoDispW / 2, annoDispH / 2, f); redraw(); }
+  function onAnnoWheel(e) {
+    e.preventDefault();
+    const r = modalEls.canvas.getBoundingClientRect();
+    if (e.ctrlKey) zoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(-e.deltaY * 0.01));  // pinch / ⌃scroll
+    else { annoImgRect.x -= e.deltaX; annoImgRect.y -= e.deltaY; }                              // two-finger / wheel pan
+    redraw();
+  }
 
   function openAnnotator(slot, btn) {
     if (!slot.img) return;
     const m = ensureModal();
     annoSlot = slot; annoBtnRef = btn;
     annoWork = cloneAnns(slot.annotations); annoWork.forEach((a) => { if (!a.id) a.id = uid(); });
-    annoTool = "select"; annoColor = "#ef4444"; setSel([]); annoDraft = null; annoAction = null; annoTextEdit = null;
+    annoTool = "select"; annoColor = "#ef4444"; setSel([]); annoDraft = null; annoAction = null; annoTextEdit = null; annoSpace = false;
     annoHist = []; annoHistIdx = -1; pushHistory();
-    annoMargin = 0.3;
-    layoutModalCanvas();
+    setViewport();
+    fitView();
     m.input.style.display = "none";
     m.backdrop.classList.add("open");
     updateToolbar(); updateColors(); updateUndoRedo(); redraw();
@@ -1479,6 +1503,10 @@
     else if ((e.metaKey || e.ctrlKey) && (e.key === "z" || e.key === "Z")) { e.preventDefault(); e.shiftKey ? redo() : undo(); }
     else if ((e.metaKey || e.ctrlKey) && (e.key === "y" || e.key === "Y")) { e.preventDefault(); redo(); }
     else if (e.key >= "1" && e.key <= "5" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); setTool(TOOL_KEYS[+e.key - 1]); }
+    else if (e.key === " ") { e.preventDefault(); annoSpace = true; if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); modalEls.canvas.style.cursor = "grab"; }
+  });
+  document.addEventListener("keyup", (e) => {
+    if (e.key === " " && annoSpace) { annoSpace = false; if (modalEls && (!annoAction || annoAction.kind !== "pan")) modalEls.canvas.style.cursor = ""; }
   });
 
   // ---------- global controls ----------
