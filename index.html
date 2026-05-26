@@ -1,0 +1,707 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Before / After Builder</title>
+<style>
+  :root{
+    --bg:#f1f5f9; --panel:#ffffff; --ink:#0f172a; --muted:#64748b;
+    --line:#e2e8f0; --accent:#4f46e5; --accent-ink:#ffffff;
+    --before:#b91c1c; --before-bg:#fee2e2; --after:#15803d; --after-bg:#dcfce7;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{
+    font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    background:var(--bg); color:var(--ink);
+    padding:24px;
+  }
+  header{max-width:1400px;margin:0 auto 20px}
+  header h1{margin:0;font-size:24px;letter-spacing:-.01em}
+  header .sub{margin:4px 0 0;color:var(--muted)}
+  .app{
+    max-width:1400px;margin:0 auto;display:grid;gap:24px;
+    grid-template-columns:minmax(380px,1fr) minmax(420px,1.15fr);
+    align-items:start;
+  }
+  @media (max-width:960px){.app{grid-template-columns:1fr}}
+
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;margin-bottom:16px}
+  .panel h2{margin:0;font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+  .panel-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+  label{display:block;font-size:13px;font-weight:600;color:var(--muted);margin-bottom:4px}
+  input[type=text],select{
+    width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:9px;
+    font:inherit;color:var(--ink);background:#fff;
+  }
+  input[type=text]:focus,select:focus{outline:2px solid var(--accent);outline-offset:-1px;border-color:var(--accent)}
+  .row{display:flex;gap:12px}
+  .row>*{flex:1}
+  .field{margin-bottom:12px}
+  .field:last-child{margin-bottom:0}
+  input[type=color]{width:100%;height:38px;padding:2px;border:1px solid var(--line);border-radius:9px;background:#fff}
+
+  button{font:inherit;cursor:pointer;border-radius:9px;border:1px solid var(--line);background:#fff;color:var(--ink);padding:8px 12px;font-weight:600}
+  button:hover{background:#f8fafc}
+  button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+  button.primary:hover{filter:brightness(1.06)}
+  button.ghost{border:none;background:transparent;color:var(--muted);padding:6px 8px}
+  button.ghost:hover{background:#f1f5f9;color:var(--ink)}
+  button.tiny{padding:4px 8px;font-size:12px}
+
+  .change{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:16px}
+  .change-head{display:flex;align-items:center;gap:8px;margin-bottom:12px}
+  .change-head .idx{font-size:12px;font-weight:700;color:var(--muted);background:#f1f5f9;border-radius:6px;padding:3px 8px;white-space:nowrap}
+  .change-head .grow{flex:1}
+  .change-head .tools{display:flex;gap:2px}
+
+  .pair{border:1px solid var(--line);border-radius:11px;padding:12px;margin-bottom:12px;background:#fbfcfe}
+  .pair-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+  .pair-head .tag{font-size:12px;font-weight:700;color:var(--muted)}
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .img-col .col-tag{font-size:11px;font-weight:800;letter-spacing:.05em;margin-bottom:6px;display:inline-block;padding:2px 8px;border-radius:999px}
+  .img-col.before .col-tag{color:var(--before);background:var(--before-bg)}
+  .img-col.after .col-tag{color:var(--after);background:var(--after-bg)}
+  .slot{
+    position:relative;border:2px dashed #cbd5e1;border-radius:10px;aspect-ratio:16/10;
+    background:#fff center/contain no-repeat;display:flex;align-items:center;justify-content:center;
+    text-align:center;color:#94a3b8;font-size:12px;padding:8px;cursor:pointer;user-select:none;
+  }
+  .slot.filled{border-style:solid;border-color:var(--line)}
+  .slot.drag{border-color:var(--accent);background-color:#eef2ff}
+  .slot.paste-target{border-color:var(--accent);box-shadow:0 0 0 3px rgba(79,70,229,.18)}
+  .slot .hint b{color:#64748b}
+  .slot-actions{display:flex;gap:6px;margin:6px 0}
+  .slot-actions button{flex:1}
+  input.cap{margin-top:2px}
+
+  .add-change{width:100%;padding:12px;border:1.5px dashed var(--line);background:#fff;color:var(--accent);font-weight:700}
+  .add-change:hover{background:#eef2ff;border-color:var(--accent)}
+  .add-pair{width:100%;margin-top:2px;border-style:dashed;color:var(--muted)}
+  .add-change.drag,.add-pair.drag{border-color:var(--accent);background:#eef2ff;color:var(--accent)}
+
+  .preview{position:sticky;top:16px}
+  .preview-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
+  .bar-actions{display:flex;gap:8px}
+  .dims{font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
+  .canvas-wrap{
+    background:
+      linear-gradient(45deg,#eef2f7 25%,transparent 25%),
+      linear-gradient(-45deg,#eef2f7 25%,transparent 25%),
+      linear-gradient(45deg,transparent 75%,#eef2f7 75%),
+      linear-gradient(-45deg,transparent 75%,#eef2f7 75%);
+    background-size:20px 20px;background-position:0 0,0 10px,10px -10px,-10px 0;
+    border:1px solid var(--line);border-radius:14px;padding:16px;overflow:auto;max-height:calc(100vh - 120px);
+  }
+  #preview{display:block;max-width:100%;height:auto;margin:0 auto;border-radius:8px;
+    box-shadow:0 10px 30px rgba(15,23,42,.12)}
+</style>
+</head>
+<body>
+<header>
+  <h1>Before / After Builder</h1>
+  <p class="sub">Compose before/after screenshots into a single shareable PNG — entirely in your browser, nothing uploaded.</p>
+</header>
+
+<div class="app">
+  <section class="editor">
+    <div class="panel">
+      <div class="panel-head">
+        <h2>Document</h2>
+        <button id="reset" class="ghost tiny" title="Clear everything and start over">↺ Reset all</button>
+      </div>
+      <div class="field">
+        <label for="title">Title</label>
+        <input type="text" id="title" placeholder="e.g. Checkout redesign — Q2">
+      </div>
+      <div class="field row">
+        <div>
+          <label for="beforeLabel">“Before” label</label>
+          <input type="text" id="beforeLabel" value="BEFORE">
+        </div>
+        <div>
+          <label for="afterLabel">“After” label</label>
+          <input type="text" id="afterLabel" value="AFTER">
+        </div>
+      </div>
+      <div class="field row">
+        <div>
+          <label for="bg">Background</label>
+          <input type="color" id="bg" value="#ffffff">
+        </div>
+        <div>
+          <label for="scale">Export quality</label>
+          <select id="scale">
+            <option value="1">1× (standard)</option>
+            <option value="2" selected>2× (crisp)</option>
+            <option value="3">3× (high-res)</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div id="changes"></div>
+    <button id="addChange" class="add-change">+ Add change</button>
+  </section>
+
+  <aside class="preview">
+    <div class="preview-bar">
+      <span id="dims" class="dims"></span>
+      <div class="bar-actions">
+        <button id="downloadSections" title="Download every section as a separate PNG">⬇ Each section</button>
+        <button id="download" class="primary">⬇ Download PNG</button>
+      </div>
+    </div>
+    <div class="canvas-wrap">
+      <canvas id="preview"></canvas>
+    </div>
+  </aside>
+</div>
+
+<script>
+(() => {
+  "use strict";
+
+  // ---------- state ----------
+  const uid = () => Math.random().toString(36).slice(2, 9);
+  const newSlot = () => ({ caption: "", img: null, dataUrl: null, w: 0, h: 0, _el: null });
+  const newPair = () => ({ id: uid(), before: newSlot(), after: newSlot() });
+  const newChange = () => ({ id: uid(), title: "", pairs: [newPair()] });
+
+  const state = {
+    title: "",
+    beforeLabel: "BEFORE",
+    afterLabel: "AFTER",
+    bg: "#ffffff",
+    scale: 2,
+    changes: [newChange()],
+  };
+
+  let activePaste = null; // { el, obj }
+
+  // ---------- session persistence ----------
+  const STORE_KEY = "beforeafter:v1";
+  let saveTimer = null;
+
+  function serialize() {
+    return JSON.stringify({
+      title: state.title, beforeLabel: state.beforeLabel, afterLabel: state.afterLabel,
+      bg: state.bg, scale: state.scale,
+      changes: state.changes.map((ch) => ({
+        title: ch.title,
+        pairs: ch.pairs.map((p) => ({
+          before: { caption: p.before.caption, dataUrl: p.before.dataUrl },
+          after: { caption: p.after.caption, dataUrl: p.after.dataUrl },
+        })),
+      })),
+    });
+  }
+  function scheduleSave() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      try { sessionStorage.setItem(STORE_KEY, serialize()); }
+      catch (e) { /* quota exceeded — skip persisting this update */ }
+    }, 300);
+  }
+  function restoreSlot(d = {}) {
+    const s = newSlot();
+    s.caption = d.caption || "";
+    s.dataUrl = d.dataUrl || null;
+    return s;
+  }
+  function loadSaved() {
+    let raw;
+    try { raw = sessionStorage.getItem(STORE_KEY); } catch (e) { return false; }
+    if (!raw) return false;
+    let d;
+    try { d = JSON.parse(raw); } catch (e) { return false; }
+    if (!d || !Array.isArray(d.changes)) return false;
+    state.title = d.title || "";
+    state.beforeLabel = d.beforeLabel != null ? d.beforeLabel : "BEFORE";
+    state.afterLabel = d.afterLabel != null ? d.afterLabel : "AFTER";
+    state.bg = d.bg || "#ffffff";
+    state.scale = Number(d.scale) || 2;
+    state.changes = d.changes.map((ch) => ({
+      id: uid(), title: ch.title || "",
+      pairs: (ch.pairs || []).map((p) => ({
+        id: uid(), before: restoreSlot(p.before), after: restoreSlot(p.after),
+      })),
+    }));
+    if (!state.changes.length) state.changes = [newChange()];
+    return true;
+  }
+  function hydrateImages() {
+    state.changes.forEach((ch) => ch.pairs.forEach((p) => {
+      [p.before, p.after].forEach((s) => {
+        if (s.dataUrl && !s.img) {
+          const img = new Image();
+          img.onload = () => { s.img = img; s.w = img.naturalWidth; s.h = img.naturalHeight; drawPreview(); };
+          img.src = s.dataUrl;
+        }
+      });
+    }));
+  }
+  function syncControls() {
+    document.getElementById("title").value = state.title;
+    document.getElementById("beforeLabel").value = state.beforeLabel;
+    document.getElementById("afterLabel").value = state.afterLabel;
+    document.getElementById("bg").value = state.bg;
+    document.getElementById("scale").value = String(state.scale);
+  }
+  function resetAll() {
+    if (!confirm("Clear everything and start over? This can't be undone.")) return;
+    try { sessionStorage.removeItem(STORE_KEY); } catch (e) {}
+    state.title = ""; state.beforeLabel = "BEFORE"; state.afterLabel = "AFTER";
+    state.bg = "#ffffff"; state.scale = 2; state.changes = [newChange()];
+    syncControls(); buildEditor(); drawPreview();
+  }
+
+  // ---------- tiny DOM helper ----------
+  function h(tag, attrs = {}, ...kids) {
+    const e = document.createElement(tag);
+    for (const k in attrs) {
+      const v = attrs[k];
+      if (v == null) continue;
+      if (k === "class") e.className = v;
+      else if (k === "style") e.style.cssText = v;
+      else if (k === "html") e.innerHTML = v;
+      else if (k.startsWith("on")) e.addEventListener(k.slice(2).toLowerCase(), v);
+      else e.setAttribute(k, v);
+    }
+    for (const kid of kids.flat()) {
+      if (kid == null || kid === false) continue;
+      e.append(kid.nodeType ? kid : document.createTextNode(kid));
+    }
+    return e;
+  }
+
+  // ---------- image loading ----------
+  function loadFile(file, slot) {
+    if (!file || !file.type.startsWith("image/")) return;
+    const r = new FileReader();
+    r.onload = () => setSlotImage(slot, r.result);
+    r.readAsDataURL(file);
+  }
+  const imageFiles = (fileList) => [...fileList].filter((f) => f.type.startsWith("image/"));
+  const pairsNeeded = (n) => Math.max(1, Math.ceil(n / 2));
+
+  // Drop/select N images onto one slot: first fills this slot, second fills its pair sibling.
+  function assignFiles(fileList, slot, sibling) {
+    const files = imageFiles(fileList);
+    if (files[0]) loadFile(files[0], slot);
+    if (files[1] && sibling) loadFile(files[1], sibling);
+  }
+  // Distribute images across pair objects: before, after, before, after...
+  function fillPairs(pairs, files) {
+    files.forEach((f, i) => {
+      const p = pairs[Math.floor(i / 2)];
+      if (p) loadFile(f, i % 2 === 0 ? p.before : p.after);
+    });
+  }
+  // Drop onto "Add pair": create enough pairs to hold the images, then fill them.
+  function dropAddPair(change, files) {
+    const created = [];
+    for (let i = 0; i < pairsNeeded(files.length); i++) { const p = newPair(); change.pairs.push(p); created.push(p); }
+    buildEditor(); drawPreview();
+    fillPairs(created, files);
+  }
+  // Drop onto "Add change": create a new change holding the images.
+  function dropAddChange(files) {
+    const ch = { id: uid(), title: "", pairs: [] };
+    for (let i = 0; i < pairsNeeded(files.length); i++) ch.pairs.push(newPair());
+    state.changes.push(ch);
+    buildEditor(); drawPreview();
+    fillPairs(ch.pairs, files);
+  }
+  function setSlotImage(slot, dataUrl) {
+    const img = new Image();
+    img.onload = () => {
+      slot.img = img; slot.dataUrl = dataUrl;
+      slot.w = img.naturalWidth; slot.h = img.naturalHeight;
+      refreshSlot(slot);
+      drawPreview();
+    };
+    img.src = dataUrl;
+  }
+  function clearSlot(slot) {
+    slot.img = null; slot.dataUrl = null; slot.w = 0; slot.h = 0;
+    refreshSlot(slot);
+    drawPreview();
+  }
+  function refreshSlot(slot) {
+    const el = slot._el;
+    if (!el) return;
+    if (slot.dataUrl) {
+      el.classList.add("filled");
+      el.style.backgroundImage = `url(${slot.dataUrl})`;
+      el.innerHTML = "";
+    } else {
+      el.classList.remove("filled");
+      el.style.backgroundImage = "";
+      el.innerHTML = `<span class="hint"><b>Click to select</b><br>then paste, or drop / browse an image</span>`;
+    }
+  }
+  function setPasteTarget(el, obj) {
+    if (activePaste && activePaste.el) activePaste.el.classList.remove("paste-target");
+    activePaste = { el, obj };
+    el.classList.add("paste-target");
+  }
+  document.addEventListener("paste", (e) => {
+    if (!activePaste) return;
+    const items = (e.clipboardData && e.clipboardData.items) || [];
+    for (const it of items) {
+      if (it.kind === "file" && it.type.startsWith("image/")) {
+        const f = it.getAsFile();
+        if (f) { loadFile(f, activePaste.obj); e.preventDefault(); }
+        break;
+      }
+    }
+  });
+
+  // ---------- editor UI ----------
+  const changesRoot = document.getElementById("changes");
+
+  function imageColumn(slot, sibling, kind, labelText) {
+    const file = h("input", {
+      type: "file", accept: "image/*", multiple: "", style: "display:none",
+      onchange: (e) => { assignFiles(e.target.files, slot, sibling); e.target.value = ""; },
+    });
+    const drop = h("div", {
+      class: "slot",
+      onclick: () => setPasteTarget(drop, slot),
+      ondragover: (e) => { e.preventDefault(); drop.classList.add("drag"); },
+      ondragleave: () => drop.classList.remove("drag"),
+      ondrop: (e) => {
+        e.preventDefault(); drop.classList.remove("drag");
+        assignFiles(e.dataTransfer.files, slot, sibling);
+      },
+    });
+    slot._el = drop;
+    refreshSlot(slot);
+
+    const cap = h("input", {
+      type: "text", class: "cap", value: slot.caption || "", placeholder: "Caption (optional)",
+      oninput: (e) => { slot.caption = e.target.value; drawPreview(); },
+    });
+
+    return h("div", { class: `img-col ${kind}` },
+      h("span", { class: "col-tag" }, labelText),
+      drop, file,
+      h("div", { class: "slot-actions" },
+        h("button", { class: "tiny", onclick: () => file.click() }, "Browse"),
+        h("button", { class: "tiny", onclick: () => clearSlot(slot) }, "Clear"),
+      ),
+      cap,
+    );
+  }
+
+  function pairBlock(change, pair, pi) {
+    const swap = () => {
+      const p = change.pairs[pi];
+      [p.before, p.after] = [p.after, p.before];
+      buildEditor(); drawPreview();
+    };
+    const movePair = (dir) => {
+      const j = pi + dir;
+      if (j < 0 || j >= change.pairs.length) return;
+      [change.pairs[pi], change.pairs[j]] = [change.pairs[j], change.pairs[pi]];
+      buildEditor(); drawPreview();
+    };
+    const multi = change.pairs.length > 1;
+    const head = h("div", { class: "pair-head" },
+      h("span", { class: "tag" }, `Pair ${pi + 1}`),
+      h("div", { class: "tools" },
+        multi ? h("button", { class: "ghost tiny", title: "Move pair up", onclick: () => movePair(-1) }, "↑") : null,
+        multi ? h("button", { class: "ghost tiny", title: "Move pair down", onclick: () => movePair(1) }, "↓") : null,
+        h("button", { class: "ghost tiny", title: "Swap before and after", onclick: swap }, "⇄ Swap"),
+        multi
+          ? h("button", { class: "ghost tiny", onclick: () => { change.pairs.splice(pi, 1); buildEditor(); drawPreview(); } }, "Remove pair")
+          : null,
+      ),
+    );
+    return h("div", { class: "pair" },
+      head,
+      h("div", { class: "cols" },
+        imageColumn(pair.before, pair.after, "before", state.beforeLabel || "Before"),
+        imageColumn(pair.after, pair.before, "after", state.afterLabel || "After"),
+      ),
+    );
+  }
+
+  function changeBlock(change, ci) {
+    const titleInput = h("input", {
+      type: "text", value: change.title || "", placeholder: `Change ${ci + 1} title (e.g. Navigation bar)`,
+      oninput: (e) => { change.title = e.target.value; drawPreview(); },
+    });
+
+    const move = (dir) => {
+      const j = ci + dir;
+      if (j < 0 || j >= state.changes.length) return;
+      [state.changes[ci], state.changes[j]] = [state.changes[j], state.changes[ci]];
+      buildEditor(); drawPreview();
+    };
+
+    const head = h("div", { class: "change-head" },
+      h("span", { class: "idx" }, `#${ci + 1}`),
+      h("div", { class: "grow" }, titleInput),
+      h("div", { class: "tools" },
+        h("button", { class: "ghost tiny", title: "Move up", onclick: () => move(-1) }, "↑"),
+        h("button", { class: "ghost tiny", title: "Move down", onclick: () => move(1) }, "↓"),
+        h("button", { class: "ghost tiny", title: "Export just this change", onclick: () => exportChange(change) }, "⬇ PNG"),
+        state.changes.length > 1
+          ? h("button", { class: "ghost tiny", title: "Delete change", onclick: () => { state.changes.splice(ci, 1); buildEditor(); drawPreview(); } }, "✕")
+          : null,
+      ),
+    );
+
+    const pairs = h("div", {}, change.pairs.map((p, pi) => pairBlock(change, p, pi)));
+    const addPair = h("button", {
+      class: "add-pair",
+      onclick: () => { change.pairs.push(newPair()); buildEditor(); drawPreview(); },
+      ondragover: (e) => { e.preventDefault(); addPair.classList.add("drag"); },
+      ondragleave: () => addPair.classList.remove("drag"),
+      ondrop: (e) => {
+        e.preventDefault(); addPair.classList.remove("drag");
+        const files = imageFiles(e.dataTransfer.files);
+        if (files.length) dropAddPair(change, files);
+      },
+    }, "+ Add before/after pair");
+
+    return h("div", { class: "change" }, head, pairs, addPair);
+  }
+
+  function buildEditor() {
+    activePaste = null;
+    changesRoot.innerHTML = "";
+    state.changes.forEach((ch, ci) => changesRoot.append(changeBlock(ch, ci)));
+  }
+
+  // ---------- layout + canvas rendering ----------
+  const meas = document.createElement("canvas").getContext("2d");
+  const FAMILY = `system-ui,-apple-system,"Segoe UI",Roboto,sans-serif`;
+  const font = (weight, size) => `${weight} ${size}px ${FAMILY}`;
+
+  function wrap(text, f, maxW) {
+    meas.font = f;
+    const out = [];
+    String(text).split("\n").forEach((para) => {
+      const words = para.split(/\s+/).filter(Boolean);
+      if (!words.length) { out.push(""); return; }
+      let line = words[0];
+      for (let i = 1; i < words.length; i++) {
+        const t = line + " " + words[i];
+        if (meas.measureText(t).width > maxW) { out.push(line); line = words[i]; }
+        else line = t;
+      }
+      out.push(line);
+    });
+    return out;
+  }
+
+  function rr(ctx, x, y, w, h_, r) {
+    r = Math.min(r, w / 2, h_ / 2);
+    ctx.beginPath();
+    if (ctx.roundRect) { ctx.roundRect(x, y, w, h_, r); return; }
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h_, r);
+    ctx.arcTo(x + w, y + h_, x, y + h_, r);
+    ctx.arcTo(x, y + h_, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  const C = {
+    PAD: 48, TITLE: 52, CHANGE: 34, LABEL: 22, CAP: 19,
+    cellW: 560, pairGap: 36, rowGap: 40, changeGap: 60, titleGap: 40,
+    ctitleGap: 24, labelGap: 14, capGap: 14, maxImgH: 680, lh: 1.3, radius: 10,
+  };
+
+  function blockLayout(slot, labelText, bg, fg, x, y, items) {
+    let iw, ih;
+    if (slot.img && slot.w && slot.h) {
+      let s = C.cellW / slot.w;
+      if (slot.h * s > C.maxImgH) s = C.maxImgH / slot.h;
+      iw = slot.w * s; ih = slot.h * s;
+    } else { iw = C.cellW; ih = Math.round(C.cellW * 0.6); }
+    const ix = x + (C.cellW - iw) / 2;
+
+    meas.font = font(700, C.LABEL);
+    const tw = meas.measureText(labelText).width;
+    const badgeH = C.LABEL + 16, badgeW = tw + 28;
+
+    let cy = y;
+    items.push({ kind: "badge", cx: x + C.cellW / 2, y: cy, w: badgeW, h: badgeH, text: labelText, size: C.LABEL, bg, fg });
+    cy += badgeH + C.labelGap;
+    items.push({ kind: "image", img: slot.img, x: ix, y: cy, w: iw, h: ih });
+    cy += ih;
+    if ((slot.caption || "").trim()) {
+      cy += C.capGap;
+      const lines = wrap(slot.caption, font(400, C.CAP), C.cellW);
+      items.push({ kind: "text", lines, x: x + C.cellW / 2, y: cy, size: C.CAP, weight: 400, color: "#475569", align: "center" });
+      cy += lines.length * C.CAP * C.lh;
+    }
+    return cy - y;
+  }
+
+  function computeLayout(title, changes) {
+    const contentW = C.cellW * 2 + C.pairGap;
+    const W = contentW + C.PAD * 2;
+    const items = [];
+    let y = C.PAD;
+
+    if ((title || "").trim()) {
+      const lines = wrap(title, font(800, C.TITLE), contentW);
+      items.push({ kind: "text", lines, x: C.PAD + contentW / 2, y, size: C.TITLE, weight: 800, color: "#0f172a", align: "center" });
+      y += lines.length * C.TITLE * C.lh + C.titleGap;
+    }
+
+    changes.forEach((ch, idx) => {
+      if (idx > 0) y += C.changeGap;
+      if ((ch.title || "").trim()) {
+        const lines = wrap(ch.title, font(700, C.CHANGE), contentW);
+        items.push({ kind: "text", lines, x: C.PAD, y, size: C.CHANGE, weight: 700, color: "#0f172a", align: "left" });
+        y += lines.length * C.CHANGE * C.lh + 10;
+        items.push({ kind: "line", x1: C.PAD, x2: C.PAD + contentW, y, color: "#e2e8f0", width: 2 });
+        y += C.ctitleGap;
+      }
+      ch.pairs.forEach((p, pi) => {
+        if (pi > 0) y += C.rowGap;
+        const bh = blockLayout(p.before, state.beforeLabel || "BEFORE", "#fee2e2", "#b91c1c", C.PAD, y, items);
+        const ah = blockLayout(p.after, state.afterLabel || "AFTER", "#dcfce7", "#15803d", C.PAD + C.cellW + C.pairGap, y, items);
+        y += Math.max(bh, ah);
+      });
+    });
+
+    if (!items.length) {
+      items.push({ kind: "text", lines: ["Add a title and screenshots to build your preview"], x: W / 2, y: C.PAD, size: 22, weight: 500, color: "#94a3b8", align: "center" });
+      y += 30;
+    }
+
+    y += C.PAD;
+    return { W, H: y, items };
+  }
+
+  function draw(ctx, items, S, bg, W, H) {
+    ctx.setTransform(S, 0, 0, S, 0, 0);
+    ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+    ctx.textBaseline = "top";
+    for (const it of items) {
+      if (it.kind === "text") {
+        ctx.font = font(it.weight, it.size);
+        ctx.fillStyle = it.color;
+        ctx.textAlign = it.align;
+        const lh = it.size * C.lh;
+        it.lines.forEach((ln, i) => ctx.fillText(ln, it.x, it.y + i * lh));
+      } else if (it.kind === "line") {
+        ctx.strokeStyle = it.color; ctx.lineWidth = it.width;
+        ctx.beginPath(); ctx.moveTo(it.x1, it.y); ctx.lineTo(it.x2, it.y); ctx.stroke();
+      } else if (it.kind === "badge") {
+        rr(ctx, it.cx - it.w / 2, it.y, it.w, it.h, it.h / 2);
+        ctx.fillStyle = it.bg; ctx.fill();
+        ctx.font = font(700, it.size); ctx.fillStyle = it.fg;
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText(it.text, it.cx, it.y + it.h / 2 + 1);
+        ctx.textBaseline = "top";
+      } else if (it.kind === "image") {
+        if (it.img) {
+          ctx.save(); rr(ctx, it.x, it.y, it.w, it.h, C.radius); ctx.clip();
+          ctx.drawImage(it.img, it.x, it.y, it.w, it.h); ctx.restore();
+          ctx.save(); rr(ctx, it.x, it.y, it.w, it.h, C.radius);
+          ctx.strokeStyle = "rgba(15,23,42,.12)"; ctx.lineWidth = 1.5; ctx.stroke(); ctx.restore();
+        } else {
+          ctx.save(); rr(ctx, it.x, it.y, it.w, it.h, C.radius);
+          ctx.fillStyle = "#f1f5f9"; ctx.fill();
+          ctx.strokeStyle = "#cbd5e1"; ctx.lineWidth = 2; ctx.setLineDash([8, 6]); ctx.stroke();
+          ctx.restore();
+          ctx.fillStyle = "#94a3b8"; ctx.font = font(500, 18);
+          ctx.textAlign = "center"; ctx.textBaseline = "middle";
+          ctx.fillText("No image", it.x + it.w / 2, it.y + it.h / 2);
+          ctx.textBaseline = "top";
+        }
+      }
+    }
+  }
+
+  function renderModel(canvas, title, changes) {
+    const S = state.scale;
+    const { W, H, items } = computeLayout(title, changes);
+    canvas.width = Math.max(1, Math.round(W * S));
+    canvas.height = Math.max(1, Math.round(H * S));
+    draw(canvas.getContext("2d"), items, S, state.bg, W, H);
+    return { W, H, S };
+  }
+
+  // ---------- preview + export ----------
+  const previewCanvas = document.getElementById("preview");
+  const dimsEl = document.getElementById("dims");
+
+  function drawPreview() {
+    const { W, H, S } = renderModel(previewCanvas, state.title, state.changes);
+    dimsEl.textContent = `${Math.round(W * S)} × ${Math.round(H * S)} px`;
+    scheduleSave();
+  }
+
+  function slug(s) {
+    return (String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")) || "before-after";
+  }
+  function download(canvas, name) {
+    canvas.toBlob((blob) => {
+      const url = URL.createObjectURL(blob);
+      const a = h("a", { href: url, download: name });
+      document.body.append(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }, "image/png");
+  }
+  function exportChange(change) {
+    const tmp = document.createElement("canvas");
+    renderModel(tmp, "", [change]);
+    download(tmp, slug(change.title || "change") + ".png");
+  }
+  function downloadSections() {
+    if (!state.changes.length) return;
+    // Stagger downloads so the browser doesn't drop all-but-one of the saves.
+    state.changes.forEach((ch, i) => {
+      setTimeout(() => {
+        const tmp = document.createElement("canvas");
+        renderModel(tmp, "", [ch]);
+        download(tmp, `${i + 1}-${slug(ch.title || "change")}.png`);
+      }, i * 350);
+    });
+  }
+
+  // ---------- global controls ----------
+  const bind = (id, fn) => document.getElementById(id).addEventListener("input", fn);
+  bind("title", (e) => { state.title = e.target.value; drawPreview(); });
+  bind("beforeLabel", (e) => { state.beforeLabel = e.target.value; updateColTags(); drawPreview(); });
+  bind("afterLabel", (e) => { state.afterLabel = e.target.value; updateColTags(); drawPreview(); });
+  bind("bg", (e) => { state.bg = e.target.value; drawPreview(); });
+  bind("scale", (e) => { state.scale = Number(e.target.value); drawPreview(); });
+  const addChangeBtn = document.getElementById("addChange");
+  addChangeBtn.addEventListener("click", () => { state.changes.push(newChange()); buildEditor(); drawPreview(); });
+  addChangeBtn.addEventListener("dragover", (e) => { e.preventDefault(); addChangeBtn.classList.add("drag"); });
+  addChangeBtn.addEventListener("dragleave", () => addChangeBtn.classList.remove("drag"));
+  addChangeBtn.addEventListener("drop", (e) => {
+    e.preventDefault(); addChangeBtn.classList.remove("drag");
+    const files = imageFiles(e.dataTransfer.files);
+    if (files.length) dropAddChange(files);
+  });
+  document.getElementById("download").addEventListener("click", () => download(previewCanvas, slug(state.title) + ".png"));
+  document.getElementById("downloadSections").addEventListener("click", downloadSections);
+  document.getElementById("reset").addEventListener("click", resetAll);
+
+  function updateColTags() {
+    document.querySelectorAll(".img-col.before .col-tag").forEach((e) => e.textContent = state.beforeLabel || "Before");
+    document.querySelectorAll(".img-col.after .col-tag").forEach((e) => e.textContent = state.afterLabel || "After");
+  }
+
+  // ---------- init ----------
+  const restored = loadSaved();
+  syncControls();
+  buildEditor();
+  if (restored) hydrateImages();
+  drawPreview();
+})();
+</script>
+</body>
+</html>
