@@ -128,11 +128,14 @@
   .tool{padding:7px 11px;border:1px solid var(--line);border-radius:8px;background:#fff;font-weight:600;font-size:13px;color:var(--ink)}
   .tool:hover{background:#f8fafc}
   .tool.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .kbd{display:inline-block;margin-left:6px;padding:1px 5px;border-radius:5px;background:rgba(15,23,42,.08);color:var(--muted);font-size:10px;font-weight:700;line-height:1.4;vertical-align:middle}
+  .tool.active .kbd{background:rgba(255,255,255,.25);color:#fff}
   .swatch{width:22px;height:22px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 0 1px var(--line);cursor:pointer;padding:0}
   .swatch.active{box-shadow:0 0 0 2px var(--accent)}
-  .modal-canvas-wrap{padding:16px;overflow:auto;background:#f1f5f9;display:flex;align-items:center;justify-content:center;min-height:0}
+  .modal-canvas-wrap{position:relative;padding:16px;overflow:auto;background:#f1f5f9;display:flex;align-items:center;justify-content:center;min-height:0}
   #annoCanvas{display:block;background:#fff;border-radius:6px;box-shadow:0 4px 18px rgba(0,0,0,.15);touch-action:none}
   #annoCanvas.draw{cursor:crosshair}
+  .anno-input{position:absolute;z-index:5;box-sizing:border-box;border:none;border-radius:14px;padding:5px 11px;font-weight:700;font-family:inherit;line-height:1.2;color:#fff;outline:2px solid #fff;box-shadow:0 0 0 4px rgba(79,70,229,.5);width:auto;min-width:50px;resize:none;overflow:hidden;white-space:pre-wrap}
   .modal-foot{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:12px 14px;border-top:1px solid var(--line)}
   .modal-hint{color:var(--muted);font-size:12px}
   .dims{font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
@@ -621,13 +624,16 @@
 
   // Lay out one before/after image into a column `cw` wide, anchored at (x, y). Returns its height.
   function blockLayout(slot, labelText, bg, fg, x, y, cw, items) {
-    let iw, ih;
-    if (slot.img && slot.w && slot.h) {
-      let s = cw / slot.w;
-      if (slot.h * s > C.maxImgH) s = C.maxImgH / slot.h;
-      iw = slot.w * s; ih = slot.h * s;
-    } else { iw = cw; ih = Math.round(cw * 0.6); }
-    const ix = x + (cw - iw) / 2;
+    const natW = (slot.img && slot.w) ? slot.w : cw;
+    const natH = (slot.img && slot.h) ? slot.h : Math.round(cw * 0.6);
+    // expand the drawn region to fit any annotations that extend outside the image
+    const ext = slot.img ? annsExtent(slot.annotations || []) : { x0: 0, y0: 0, x1: 1, y1: 1 };
+    const regWu = ext.x1 - ext.x0, regHu = ext.y1 - ext.y0;
+    let s = cw / (regWu * natW);
+    if (regHu * natH * s > C.maxImgH) s = C.maxImgH / (regHu * natH);
+    const regionW = regWu * natW * s, regionH = regHu * natH * s;
+    const unitX = natW * s, unitY = natH * s;
+    const regionX = x + (cw - regionW) / 2;
 
     meas.font = font(700, C.LABEL);
     const tw = meas.measureText(labelText).width;
@@ -636,8 +642,9 @@
     let cy = y;
     items.push({ kind: "badge", cx: x + cw / 2, y: cy, w: badgeW, h: badgeH, text: labelText, size: C.LABEL, bg, fg });
     cy += badgeH + C.labelGap;
-    items.push({ kind: "image", img: slot.img, x: ix, y: cy, w: iw, h: ih, annotations: slot.annotations });
-    cy += ih;
+    // image occupies normalized [0,1] within the (possibly larger) region
+    items.push({ kind: "image", img: slot.img, x: regionX + (0 - ext.x0) * unitX, y: cy + (0 - ext.y0) * unitY, w: unitX, h: unitY, annotations: slot.annotations });
+    cy += regionH;
     if ((slot.caption || "").trim()) {
       cy += C.capGap;
       const lines = wrap(slot.caption, font(400, C.CAP), cw);
@@ -841,7 +848,7 @@
         out.push(`<clipPath id="${id}"><rect x="${it.x}" y="${it.y}" width="${it.w}" height="${it.h}" rx="${C.radius}"/></clipPath>`);
         out.push(`<image x="${it.x}" y="${it.y}" width="${it.w}" height="${it.h}" preserveAspectRatio="none" clip-path="url(#${id})" xlink:href="${it.img.src}"/>`);
         out.push(`<rect x="${it.x}" y="${it.y}" width="${it.w}" height="${it.h}" rx="${C.radius}" fill="none" stroke="rgba(15,23,42,0.12)" stroke-width="1.5"/>`);
-        (it.annotations || []).forEach((a) => annoPrimitives({ x: it.x, y: it.y, w: it.w, h: it.h }, a).forEach((p) => out.push(svgPrim(p))));
+        { const _r = { x: it.x, y: it.y, w: it.w, h: it.h }, _b = buildById(it.annotations); (it.annotations || []).forEach((a) => annoPrimitives(_r, resolveForRender(a, _b)).forEach((p) => out.push(svgPrim(p)))); }
       } else if (it.kind === "image") {
         out.push(`<rect x="${it.x}" y="${it.y}" width="${it.w}" height="${it.h}" rx="${C.radius}" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="2" stroke-dasharray="8 6"/>`);
         out.push(`<text x="${it.x + it.w / 2}" y="${it.y + it.h / 2}" font-family="${fam}" font-size="18" font-weight="500" fill="#94a3b8" text-anchor="middle" dominant-baseline="central">No image</text>`);
@@ -863,8 +870,10 @@
     if (a.type === "arrow") {
       const x1 = X(a.x1), y1 = Y(a.y1), x2 = X(a.x2), y2 = Y(a.y2);
       const ang = Math.atan2(y2 - y1, x2 - x1), hl = Math.max(13, 18 * k);
+      const len = Math.hypot(x2 - x1, y2 - y1) || 1, cut = Math.min(hl * 0.9, len * 0.6);
+      const bx = x2 - Math.cos(ang) * cut, by = y2 - Math.sin(ang) * cut;  // stop the line at the arrowhead base
       return [
-        { k: "line", x1, y1, x2, y2, stroke: col, sw },
+        { k: "line", x1, y1, x2: bx, y2: by, stroke: col, sw },
         { k: "poly", pts: [[x2, y2], [x2 - hl * Math.cos(ang - 0.45), y2 - hl * Math.sin(ang - 0.45)], [x2 - hl * Math.cos(ang + 0.45), y2 - hl * Math.sin(ang + 0.45)]], fill: col },
       ];
     }
@@ -876,14 +885,10 @@
       ];
     }
     if (a.type === "text") {
-      const size = Math.max(15, 22 * k), padX = 10 * k, padY = 6 * k;
-      meas.font = font(700, size);
-      const tw = meas.measureText(a.text || "").width;
-      const x = X(a.x), y = Y(a.y), w = tw + padX * 2, hh = size + padY * 2;
-      return [
-        { k: "pill", x, y, w, h: hh, fill: col },
-        { k: "text", x: x + padX, y: y + hh / 2, text: a.text || "", size, fill: "#fff", anchor: "start", baseline: "middle", weight: 700 },
-      ];
+      const size = Math.max(15, 22 * k), tm = textMetrics(a.text, size), x = X(a.x), y = Y(a.y);
+      const prims = [{ k: "pill", x, y, w: tm.w, h: tm.h, fill: col }];
+      tm.lines.forEach((ln, i) => prims.push({ k: "text", x: x + tm.padX, y: y + tm.padY + tm.lineH * (i + 0.5), text: ln, size, fill: "#fff", anchor: "start", baseline: "middle", weight: 700 }));
+      return prims;
     }
     return [];
   }
@@ -914,7 +919,66 @@
     }
     return "";
   }
-  const drawAnnotations = (ctx, rect, anns) => (anns || []).forEach((a) => annoPrimitives(rect, a).forEach((p) => drawPrim(ctx, p)));
+  // pill metrics for a (possibly multi-line) text label at a given font size
+  function textMetrics(text, size) {
+    const padX = size * 10 / 22, padY = size * 6 / 22, lineH = size * 1.2;
+    const lines = String(text || "").split("\n");
+    meas.font = font(700, size);
+    let maxW = 0; for (const l of lines) maxW = Math.max(maxW, meas.measureText(l).width);
+    return { lines, padX, padY, lineH, w: maxW + padX * 2, h: lines.length * lineH + padY * 2 };
+  }
+  // normalized bounding box of an annotation (in image-relative 0..1 units)
+  function annNormBBox(a) {
+    if (a.type === "box") return { x: a.x, y: a.y, w: a.w, h: a.h };
+    if (a.type === "number") { const r = 20 / 560; return { x: a.x - r, y: a.y - r, w: 2 * r, h: 2 * r }; }
+    if (a.type === "text") { const tm = textMetrics(a.text, 22); return { x: a.x, y: a.y, w: tm.w / 560, h: tm.h / 560 }; }
+    if (a.type === "arrow") { return { x: Math.min(a.x1, a.x2), y: Math.min(a.y1, a.y2), w: Math.abs(a.x2 - a.x1), h: Math.abs(a.y2 - a.y1) }; }
+    return { x: a.x || 0, y: a.y || 0, w: 0, h: 0 };
+  }
+  function rectBorderPoint(bb, px, py) {
+    const cx = bb.x + bb.w / 2, cy = bb.y + bb.h / 2, dx = px - cx, dy = py - cy;
+    if (!dx && !dy) return { x: cx, y: cy };
+    const s = Math.min(dx ? (bb.w / 2) / Math.abs(dx) : Infinity, dy ? (bb.h / 2) / Math.abs(dy) : Infinity);
+    return { x: cx + dx * s, y: cy + dy * s };
+  }
+  const buildById = (anns) => { const m = {}; (anns || []).forEach((a) => { if (a.id) m[a.id] = a; }); return m; };
+  // attachment point on a pinned target's edge, facing (px,py) — circle edge for numbers, rect border otherwise
+  function attachPoint(t, px, py) {
+    const bb = annNormBBox(t), cx = bb.x + bb.w / 2, cy = bb.y + bb.h / 2;
+    if (t.type === "number") {
+      const dx = px - cx, dy = py - cy, d = Math.hypot(dx, dy) || 1, r = bb.w / 2;
+      return { x: cx + (dx / d) * r, y: cy + (dy / d) * r };
+    }
+    return rectBorderPoint(bb, px, py);
+  }
+  // resolve an arrow's endpoints, snapping pinned ends to the edge of their target
+  function resolveArrowEnds(a, byId) {
+    const t1 = a.fromRef && byId[a.fromRef], t2 = a.toRef && byId[a.toRef];
+    const bb1 = t1 && annNormBBox(t1), bb2 = t2 && annNormBBox(t2);
+    const c2 = bb2 ? { x: bb2.x + bb2.w / 2, y: bb2.y + bb2.h / 2 } : { x: a.x2, y: a.y2 };
+    const c1 = bb1 ? { x: bb1.x + bb1.w / 2, y: bb1.y + bb1.h / 2 } : { x: a.x1, y: a.y1 };
+    const p1 = t1 ? attachPoint(t1, c2.x, c2.y) : { x: a.x1, y: a.y1 };
+    const p2 = t2 ? attachPoint(t2, c1.x, c1.y) : { x: a.x2, y: a.y2 };
+    return { x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y };
+  }
+  const resolveForRender = (a, byId) => (a.type === "arrow" && (a.fromRef || a.toRef)) ? { ...a, ...resolveArrowEnds(a, byId) } : a;
+  // union extent of image [0,1] and all annotations (normalized image units)
+  function annsExtent(anns) {
+    let x0 = 0, y0 = 0, x1 = 1, y1 = 1;
+    const byId = buildById(anns);
+    (anns || []).forEach((a) => {
+      let bb;
+      if (a.type === "arrow") { const e = resolveArrowEnds(a, byId); bb = { x: Math.min(e.x1, e.x2), y: Math.min(e.y1, e.y2), w: Math.abs(e.x2 - e.x1), h: Math.abs(e.y2 - e.y1) }; }
+      else bb = annNormBBox(a);
+      x0 = Math.min(x0, bb.x); y0 = Math.min(y0, bb.y); x1 = Math.max(x1, bb.x + bb.w); y1 = Math.max(y1, bb.y + bb.h);
+    });
+    return { x0, y0, x1, y1 };
+  }
+  function drawAnnotations(ctx, rect, anns) {
+    if (!anns || !anns.length) return;
+    const byId = buildById(anns);
+    anns.forEach((a) => annoPrimitives(rect, resolveForRender(a, byId)).forEach((p) => drawPrim(ctx, p)));
+  }
 
   // ---- project save / open (.json, images included) ----
   function saveProject() {
@@ -977,30 +1041,44 @@
   // ---------- annotation editor (modal) ----------
   const annoLabel = (slot) => `✏ Annotate${slot.annotations.length ? ` (${slot.annotations.length})` : ""}`;
   const COLORS = ["#ef4444", "#f59e0b", "#22c55e", "#3b82f6", "#a855f7", "#111827", "#ffffff"];
-  const TOOLS = [["select", "Select"], ["box", "▭ Box"], ["arrow", "↗ Arrow"], ["number", "① Number"], ["text", "T Text"]];
+  // [id, label, shortcut]
+  const TOOLS = [["select", "Select", "1"], ["box", "▭ Box", "2"], ["arrow", "↗ Arrow", "3"], ["number", "① Number", "4"], ["text", "T Text", "5"]];
+  const TOOL_KEYS = ["select", "box", "arrow", "number", "text"];
 
   let modalEls = null;
   let annoSlot = null, annoBtnRef = null;
-  let annoWork = [], annoTool = "select", annoColor = "#ef4444", annoSel = -1;
-  let annoDraft = null, annoDrag = null, annoDragStart = null;
+  let annoWork = [], annoTool = "select", annoColor = "#ef4444";
+  let annoSel = new Set();          // selected indices
+  let annoDraft = null;             // in-progress new box/arrow
+  let annoAction = null;            // active gesture {kind,...}
+  let annoTextEdit = null;          // {i, isNew} when inline-editing a label
   let annoHist = [], annoHistIdx = -1;
   let annoDispW = 0, annoDispH = 0, annoDPR = 1;
+  let annoImgRect = { x: 0, y: 0, w: 0, h: 0 };   // image position within the (larger) canvas
+  let annoMargin = 0.3;                            // editable space around the image (image-relative)
 
-  const rectFull = () => ({ x: 0, y: 0, w: annoDispW, h: annoDispH });
   const cloneAnns = (arr) => arr.map((a) => ({ ...a }));
-  const clamp01 = (v) => Math.max(0, Math.min(1, v));
-
+  const selArr = () => [...annoSel];
+  const setSel = (arr) => { annoSel = new Set(arr); };
+  const N2DX = (nx) => annoImgRect.x + nx * annoImgRect.w;
+  const N2DY = (ny) => annoImgRect.y + ny * annoImgRect.h;
+  const D2NX = (dx) => (dx - annoImgRect.x) / annoImgRect.w;
+  const D2NY = (dy) => (dy - annoImgRect.y) / annoImgRect.h;
+  function evtPos(e) {
+    const r = modalEls.canvas.getBoundingClientRect();
+    return { dx: Math.max(0, Math.min(annoDispW, e.clientX - r.left)), dy: Math.max(0, Math.min(annoDispH, e.clientY - r.top)) };
+  }
   function distSeg(px, py, x1, y1, x2, y2) {
     const dx = x2 - x1, dy = y2 - y1, l2 = dx * dx + dy * dy || 1;
     let t = ((px - x1) * dx + (py - y1) * dy) / l2; t = Math.max(0, Math.min(1, t));
     return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
   }
-  function annoHit(a, dx, dy, rect) {
-    const k = rect.w / 560, X = (n) => rect.x + n * rect.w, Y = (n) => rect.y + n * rect.h;
+  function annoHit(a, dx, dy) {
+    const rect = annoImgRect, k = rect.w / 560, X = (n) => rect.x + n * rect.w, Y = (n) => rect.y + n * rect.h;
     if (a.type === "box") { const x = X(a.x), y = Y(a.y); return dx >= x && dx <= x + a.w * rect.w && dy >= y && dy <= y + a.h * rect.h; }
     if (a.type === "number") { const r = Math.max(13, 20 * k); return Math.hypot(dx - X(a.x), dy - Y(a.y)) <= r; }
-    if (a.type === "text") { const size = Math.max(15, 22 * k), padX = 10 * k, padY = 6 * k; meas.font = font(700, size); const tw = meas.measureText(a.text || "").width; const x = X(a.x), y = Y(a.y); return dx >= x && dx <= x + tw + padX * 2 && dy >= y && dy <= y + size + padY * 2; }
-    if (a.type === "arrow") { const k2 = Math.max(8, 6 * k); return distSeg(dx, dy, X(a.x1), Y(a.y1), X(a.x2), Y(a.y2)) <= k2; }
+    if (a.type === "text") { const size = Math.max(15, 22 * k), tm = textMetrics(a.text, size), x = X(a.x), y = Y(a.y); return dx >= x && dx <= x + tm.w && dy >= y && dy <= y + tm.h; }
+    if (a.type === "arrow") { const e = resolveArrowEnds(a, buildById(annoWork)); return distSeg(dx, dy, X(e.x1), Y(e.y1), X(e.x2), Y(e.y2)) <= Math.max(8, 6 * k); }
     return false;
   }
   function primsBBox(prims) {
@@ -1014,160 +1092,352 @@
     });
     return { x: a, y: b, w: c - a, h: d - b };
   }
+  const rectsIntersect = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
 
+  // ----- history -----
   function pushHistory() {
     annoHist = annoHist.slice(0, annoHistIdx + 1);
     annoHist.push(cloneAnns(annoWork));
-    if (annoHist.length > 60) annoHist.shift();
+    if (annoHist.length > 80) annoHist.shift();
     annoHistIdx = annoHist.length - 1;
     updateUndoRedo();
   }
-  function undo() { if (annoHistIdx <= 0) return; annoHistIdx--; annoWork = cloneAnns(annoHist[annoHistIdx]); annoSel = -1; redraw(); updateUndoRedo(); }
-  function redo() { if (annoHistIdx >= annoHist.length - 1) return; annoHistIdx++; annoWork = cloneAnns(annoHist[annoHistIdx]); annoSel = -1; redraw(); updateUndoRedo(); }
-  function deleteSel() { if (annoSel < 0) return; annoWork.splice(annoSel, 1); annoSel = -1; pushHistory(); redraw(); }
-  function clearAnno() { if (!annoWork.length) return; annoWork = []; annoSel = -1; pushHistory(); redraw(); }
+  function undo() { if (annoHistIdx <= 0) return; annoHistIdx--; annoWork = cloneAnns(annoHist[annoHistIdx]); setSel([]); redraw(); updateUndoRedo(); }
+  function redo() { if (annoHistIdx >= annoHist.length - 1) return; annoHistIdx++; annoWork = cloneAnns(annoHist[annoHistIdx]); setSel([]); redraw(); updateUndoRedo(); }
 
+  // ----- removal (bakes pinned arrow ends so they don't jump) -----
+  function removeAnns(indices) {
+    const set = new Set(indices), ids = indices.map((j) => annoWork[j].id);
+    const byId = buildById(annoWork);
+    annoWork.forEach((a, j) => {
+      if (set.has(j) || a.type !== "arrow") return;
+      const e = resolveArrowEnds(a, byId);
+      if (ids.includes(a.fromRef)) { a.x1 = e.x1; a.y1 = e.y1; a.fromRef = null; }
+      if (ids.includes(a.toRef)) { a.x2 = e.x2; a.y2 = e.y2; a.toRef = null; }
+    });
+    annoWork = annoWork.filter((_, j) => !set.has(j));
+    setSel([]);
+  }
+  function deleteSel() { if (!annoSel.size) return; removeAnns(selArr()); pushHistory(); redraw(); }
+  function clearAnno() { if (!annoWork.length) return; annoWork = []; setSel([]); pushHistory(); redraw(); }
+  function resetToSelect() { if (annoTool !== "number") annoTool = "select"; updateToolbar(); }
+
+  // ----- toolbar state -----
   function updateToolbar() {
     const m = modalEls; if (!m) return;
     Object.entries(m.toolBtns).forEach(([id, b]) => b.classList.toggle("active", id === annoTool));
     m.canvas.classList.toggle("draw", annoTool !== "select");
-    m.delBtn.disabled = annoSel < 0;
+    m.delBtn.disabled = annoSel.size === 0;
   }
   function updateColors() { modalEls && modalEls.swatchEls.forEach((s) => s.classList.toggle("active", s._c === annoColor)); }
   function updateUndoRedo() {
     const m = modalEls; if (!m) return;
     m.undoBtn.disabled = annoHistIdx <= 0;
     m.redoBtn.disabled = annoHistIdx >= annoHist.length - 1;
-    m.delBtn.disabled = annoSel < 0;
+    m.delBtn.disabled = annoSel.size === 0;
+  }
+  function setTool(id) { annoTool = id; if (id !== "select") setSel([]); updateToolbar(); redraw(); }
+
+  // ----- handles for the single selected annotation -----
+  function selHandles() {
+    if (annoSel.size !== 1) return [];
+    const a = annoWork[selArr()[0]]; if (!a) return [];
+    const byId = buildById(annoWork), hs = [];
+    if (a.type === "arrow") {
+      const e = resolveArrowEnds(a, byId);
+      hs.push({ kind: "end", end: 1, x: N2DX(e.x1), y: N2DY(e.y1) });
+      hs.push({ kind: "end", end: 2, x: N2DX(e.x2), y: N2DY(e.y2) });
+      if (!a.fromRef) {   // only offer "add label at start" when the start isn't already linked
+        const ang = Math.atan2(e.y1 - e.y2, e.x1 - e.x2);
+        hs.push({ kind: "mkText", x: N2DX(e.x1) + Math.cos(ang) * 24, y: N2DY(e.y1) + Math.sin(ang) * 24 });
+      }
+    } else if (a.type === "box") {
+      const bb = annNormBBox(a);
+      [["nw", bb.x, bb.y], ["ne", bb.x + bb.w, bb.y], ["sw", bb.x, bb.y + bb.h], ["se", bb.x + bb.w, bb.y + bb.h]]
+        .forEach(([c, nx, ny]) => hs.push({ kind: "resize", corner: c, x: N2DX(nx), y: N2DY(ny) }));
+      hs.push({ kind: "mkArrow", x: N2DX(bb.x + bb.w) + 16, y: N2DY(bb.y + bb.h / 2) });
+    } else if (a.type === "text" || a.type === "number") {
+      const bb = annNormBBox(a);
+      hs.push({ kind: "mkArrow", x: N2DX(bb.x + bb.w) + 16, y: N2DY(bb.y + bb.h / 2) });
+    }
+    return hs;
   }
 
   function redraw() {
     const m = modalEls; if (!m || !annoSlot) return;
     const ctx = m.ctx;
     ctx.setTransform(annoDPR, 0, 0, annoDPR, 0, 0);
-    ctx.clearRect(0, 0, annoDispW, annoDispH);
-    ctx.drawImage(annoSlot.img, 0, 0, annoDispW, annoDispH);
-    const rect = rectFull();
-    annoWork.forEach((a) => annoPrimitives(rect, a).forEach((p) => drawPrim(ctx, p)));
-    if (annoDraft) annoPrimitives(rect, annoDraft).forEach((p) => drawPrim(ctx, p));
-    if (annoSel >= 0 && annoWork[annoSel]) {
-      const bb = primsBBox(annoPrimitives(rect, annoWork[annoSel])), pad = 4;
+    ctx.fillStyle = "#e9eef4"; ctx.fillRect(0, 0, annoDispW, annoDispH);
+    ctx.drawImage(annoSlot.img, annoImgRect.x, annoImgRect.y, annoImgRect.w, annoImgRect.h);
+    ctx.strokeStyle = "rgba(15,23,42,.25)"; ctx.lineWidth = 1;
+    ctx.strokeRect(annoImgRect.x + 0.5, annoImgRect.y + 0.5, annoImgRect.w - 1, annoImgRect.h - 1);
+    const byId = buildById(annoWork);
+    annoWork.forEach((a) => annoPrimitives(annoImgRect, resolveForRender(a, byId)).forEach((p) => drawPrim(ctx, p)));
+    if (annoDraft) annoPrimitives(annoImgRect, annoDraft).forEach((p) => drawPrim(ctx, p));
+    annoSel.forEach((i) => {
+      const a = annoWork[i]; if (!a) return;
+      const bb = primsBBox(annoPrimitives(annoImgRect, resolveForRender(a, byId))), pad = 4;
       ctx.save(); ctx.strokeStyle = "#4f46e5"; ctx.lineWidth = 1.5; ctx.setLineDash([5, 4]);
       ctx.strokeRect(bb.x - pad, bb.y - pad, bb.w + pad * 2, bb.h + pad * 2); ctx.restore();
+    });
+    if (annoAction && annoAction.kind === "band") {
+      const A = annoAction;
+      const rx = N2DX(Math.min(A.x0, A.x1)), ry = N2DY(Math.min(A.y0, A.y1));
+      const rw = Math.abs(A.x1 - A.x0) * annoImgRect.w, rh = Math.abs(A.y1 - A.y0) * annoImgRect.h;
+      ctx.save(); ctx.fillStyle = "rgba(79,70,229,.12)"; ctx.strokeStyle = "#4f46e5"; ctx.lineWidth = 1; ctx.setLineDash([4, 3]);
+      ctx.fillRect(rx, ry, rw, rh); ctx.strokeRect(rx, ry, rw, rh); ctx.restore();
     }
+    selHandles().forEach((hd) => {
+      ctx.save();
+      ctx.fillStyle = "#fff"; ctx.strokeStyle = "#4f46e5"; ctx.lineWidth = 2;
+      if (hd.kind === "resize") {
+        ctx.beginPath(); ctx.rect(hd.x - 5, hd.y - 5, 10, 10); ctx.fill(); ctx.stroke();
+      } else {
+        ctx.beginPath(); ctx.arc(hd.x, hd.y, 7, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+        if (hd.kind === "mkText" || hd.kind === "mkArrow") {
+          ctx.fillStyle = "#4f46e5"; ctx.font = font(700, 11); ctx.textAlign = "center"; ctx.textBaseline = "middle";
+          ctx.fillText(hd.kind === "mkText" ? "T" : "→", hd.x, hd.y + 0.5);
+        }
+      }
+      ctx.restore();
+    });
+    if (annoTextEdit && annoWork[annoTextEdit.i]) positionTextInput(annoWork[annoTextEdit.i]);
+  }
+
+  // ----- pinning helpers -----
+  function pinEndpointIfOver(a, end) {
+    const ex = end === 1 ? a.x1 : a.x2, ey = end === 1 ? a.y1 : a.y2;
+    const dx = N2DX(ex), dy = N2DY(ey);
+    for (let i = annoWork.length - 1; i >= 0; i--) {
+      const t = annoWork[i];
+      if (t === a || !(t.type === "box" || t.type === "text" || t.type === "number")) continue;
+      if (annoHit(t, dx, dy)) { if (end === 1) a.fromRef = t.id; else a.toRef = t.id; return; }
+    }
+    if (end === 1) a.fromRef = null; else a.toRef = null;
+  }
+
+  // ----- inline text editing -----
+  function positionTextInput(a) {
+    const inp = modalEls.input, cv = modalEls.canvas, k = annoImgRect.w / 560;
+    const left = cv.offsetLeft + N2DX(a.x), top = cv.offsetTop + N2DY(a.y);
+    inp.style.left = left + "px";
+    inp.style.top = top + "px";
+    inp.style.fontSize = Math.max(15, 22 * k) + "px";
+    inp.style.background = a.color || "#ef4444";
+    // keep the field from overflowing the canvas (which would scroll the whole modal)
+    inp.style.maxWidth = Math.max(60, cv.offsetLeft + cv.offsetWidth - left - 6) + "px";
+    inp.style.height = "auto"; inp.style.height = inp.scrollHeight + "px";   // grow with newlines
+  }
+  function startTextEdit(i, isNew) {
+    annoTextEdit = { i, isNew };
+    const inp = modalEls.input;
+    inp.value = annoWork[i].text || "";
+    positionTextInput(annoWork[i]);
+    inp.style.display = "block";
+    setTimeout(() => { inp.focus(); inp.select(); }, 0);
+  }
+  function commitTextEdit() {
+    if (!annoTextEdit) return;
+    const { i } = annoTextEdit, a = annoWork[i], val = modalEls.input.value.trim();
+    annoTextEdit = null; modalEls.input.style.display = "none";
+    if (!a) return;
+    if (!val) removeAnns([i]); else a.text = val;
+    pushHistory(); resetToSelect(); redraw();
+  }
+  function cancelTextEdit() {
+    if (!annoTextEdit) return;
+    const { i, isNew } = annoTextEdit, a = annoWork[i];
+    annoTextEdit = null; modalEls.input.style.display = "none";
+    if (isNew && a && !(a.text || "").trim()) { removeAnns([i]); pushHistory(); }
+    resetToSelect(); redraw();
+  }
+
+  // ----- gesture start from a handle -----
+  function startHandle(hd, nx, ny) {
+    const a = annoWork[selArr()[0]];
+    if (hd.kind === "end") {
+      annoAction = { kind: "endpoint", end: hd.end, i: selArr()[0] };
+    } else if (hd.kind === "mkText") {
+      const e = resolveArrowEnds(a, buildById(annoWork));
+      const t = { id: uid(), type: "text", x: e.x1, y: e.y1, text: "", color: annoColor };
+      annoWork.push(t); a.fromRef = t.id;
+      setSel([annoWork.length - 1]); startTextEdit(annoWork.length - 1, true);
+    } else if (hd.kind === "mkArrow") {
+      const arr = { id: uid(), type: "arrow", x1: nx, y1: ny, x2: nx, y2: ny, color: annoColor };
+      if (a.type === "text") { arr.fromRef = a.id; annoAction = { kind: "arrowHandle", i: annoWork.length, end: 2 }; }
+      else { arr.toRef = a.id; annoAction = { kind: "arrowHandle", i: annoWork.length, end: 1 }; }
+      annoWork.push(arr); setSel([annoWork.length - 1]);
+    } else if (hd.kind === "resize") {
+      const ox = hd.corner.includes("w") ? a.x + a.w : a.x;
+      const oy = hd.corner.includes("n") ? a.y + a.h : a.y;
+      annoAction = { kind: "resize", i: selArr()[0], ox, oy };
+    }
+    redraw();
   }
 
   function onAnnoDown(e) {
     e.preventDefault(); try { modalEls.canvas.setPointerCapture(e.pointerId); } catch (_) {}
-    const r = modalEls.canvas.getBoundingClientRect();
-    const dx = e.clientX - r.left, dy = e.clientY - r.top, rect = rectFull();
-    const nx = clamp01(dx / annoDispW), ny = clamp01(dy / annoDispH);
+    if (annoTextEdit) commitTextEdit();
+    const { dx, dy } = evtPos(e), nx = D2NX(dx), ny = D2NY(dy);
     if (annoTool === "select") {
+      for (const hd of selHandles()) { if (Math.hypot(dx - hd.x, dy - hd.y) <= 12) { startHandle(hd, nx, ny); return; } }
       let hit = -1;
-      for (let i = annoWork.length - 1; i >= 0; i--) { if (annoHit(annoWork[i], dx, dy, rect)) { hit = i; break; } }
-      annoSel = hit;
-      annoDrag = hit >= 0 ? { startNX: nx, startNY: ny, orig: { ...annoWork[hit] } } : null;
-      updateToolbar(); updateUndoRedo(); redraw(); return;
+      for (let i = annoWork.length - 1; i >= 0; i--) { if (annoHit(annoWork[i], dx, dy)) { hit = i; break; } }
+      if (hit >= 0) {
+        if (e.shiftKey) { annoSel.has(hit) ? annoSel.delete(hit) : annoSel.add(hit); }
+        else if (!annoSel.has(hit)) setSel([hit]);
+        annoAction = { kind: "move", startNX: nx, startNY: ny, orig: cloneAnns(annoWork) };
+      } else { setSel([]); annoAction = { kind: "band", x0: nx, y0: ny, x1: nx, y1: ny }; }
+      updateToolbar(); redraw(); return;
     }
     if (annoTool === "number") {
       const n = annoWork.filter((a) => a.type === "number").length + 1;
-      annoWork.push({ type: "number", x: nx, y: ny, n, color: annoColor }); annoSel = annoWork.length - 1;
-      pushHistory(); redraw(); return;
+      annoWork.push({ id: uid(), type: "number", x: nx, y: ny, n, color: annoColor }); setSel([annoWork.length - 1]);
+      pushHistory(); redraw(); return;   // number tool stays active
     }
     if (annoTool === "text") {
-      const t = prompt("Label text:");
-      if (t && t.trim()) { annoWork.push({ type: "text", x: nx, y: ny, text: t.trim(), color: annoColor }); annoSel = annoWork.length - 1; pushHistory(); }
-      redraw(); return;
+      annoWork.push({ id: uid(), type: "text", x: nx, y: ny, text: "", color: annoColor });
+      setSel([annoWork.length - 1]); startTextEdit(annoWork.length - 1, true); return;
     }
-    annoDragStart = { nx, ny };
+    annoAction = { kind: "draw", startNX: nx, startNY: ny };
     annoDraft = annoTool === "box"
-      ? { type: "box", x: nx, y: ny, w: 0, h: 0, color: annoColor }
-      : { type: "arrow", x1: nx, y1: ny, x2: nx, y2: ny, color: annoColor };
+      ? { id: uid(), type: "box", x: nx, y: ny, w: 0, h: 0, color: annoColor }
+      : { id: uid(), type: "arrow", x1: nx, y1: ny, x2: nx, y2: ny, color: annoColor };
   }
   function onAnnoMove(e) {
-    if (!annoDraft && !annoDrag) return;
-    const r = modalEls.canvas.getBoundingClientRect();
-    const nx = clamp01((e.clientX - r.left) / annoDispW), ny = clamp01((e.clientY - r.top) / annoDispH);
-    if (annoDraft) {
-      if (annoDraft.type === "box") {
-        annoDraft.x = Math.min(annoDragStart.nx, nx); annoDraft.y = Math.min(annoDragStart.ny, ny);
-        annoDraft.w = Math.abs(nx - annoDragStart.nx); annoDraft.h = Math.abs(ny - annoDragStart.ny);
-      } else { annoDraft.x2 = nx; annoDraft.y2 = ny; }
-      redraw(); return;
+    if (!annoAction) return;
+    const { dx, dy } = evtPos(e), nx = D2NX(dx), ny = D2NY(dy), A = annoAction;
+    if (A.kind === "draw") {
+      const d = annoDraft;
+      if (d.type === "box") { d.x = Math.min(A.startNX, nx); d.y = Math.min(A.startNY, ny); d.w = Math.abs(nx - A.startNX); d.h = Math.abs(ny - A.startNY); }
+      else { d.x2 = nx; d.y2 = ny; }
+    } else if (A.kind === "band") { A.x1 = nx; A.y1 = ny; computeBand(); }
+    else if (A.kind === "move") {
+      const ddx = nx - A.startNX, ddy = ny - A.startNY;
+      annoSel.forEach((i) => { const a = annoWork[i], o = A.orig[i]; if (a.type === "arrow") { if (!a.fromRef) { a.x1 = o.x1 + ddx; a.y1 = o.y1 + ddy; } if (!a.toRef) { a.x2 = o.x2 + ddx; a.y2 = o.y2 + ddy; } } else { a.x = o.x + ddx; a.y = o.y + ddy; } });
+    } else if (A.kind === "endpoint") {
+      const a = annoWork[A.i];
+      if (A.end === 1) { a.x1 = nx; a.y1 = ny; a.fromRef = null; } else { a.x2 = nx; a.y2 = ny; a.toRef = null; }
+    } else if (A.kind === "arrowHandle") {
+      const a = annoWork[A.i];
+      if (A.end === 2) { a.x2 = nx; a.y2 = ny; } else { a.x1 = nx; a.y1 = ny; }
+    } else if (A.kind === "resize") {
+      const a = annoWork[A.i];
+      a.x = Math.min(A.ox, nx); a.y = Math.min(A.oy, ny);
+      a.w = Math.abs(nx - A.ox); a.h = Math.abs(ny - A.oy);
     }
-    if (annoDrag && annoSel >= 0) {
-      const a = annoWork[annoSel], o = annoDrag.orig, ddx = nx - annoDrag.startNX, ddy = ny - annoDrag.startNY;
-      if (a.type === "arrow") { a.x1 = o.x1 + ddx; a.y1 = o.y1 + ddy; a.x2 = o.x2 + ddx; a.y2 = o.y2 + ddy; }
-      else { a.x = o.x + ddx; a.y = o.y + ddy; }
-      redraw();
-    }
+    redraw();
+  }
+  function computeBand() {
+    const A = annoAction, r = { x: Math.min(A.x0, A.x1), y: Math.min(A.y0, A.y1), w: Math.abs(A.x1 - A.x0), h: Math.abs(A.y1 - A.y0) };
+    const byId = buildById(annoWork), sel = [];
+    annoWork.forEach((a, i) => {
+      let bb;
+      if (a.type === "arrow") { const e = resolveArrowEnds(a, byId); bb = { x: Math.min(e.x1, e.x2), y: Math.min(e.y1, e.y2), w: Math.abs(e.x2 - e.x1), h: Math.abs(e.y2 - e.y1) }; }
+      else bb = annNormBBox(a);
+      if (rectsIntersect(r, bb)) sel.push(i);
+    });
+    setSel(sel);
   }
   function onAnnoUp() {
-    if (annoDraft) {
+    const A = annoAction; if (!A) return; annoAction = null;
+    if (A.kind === "draw") {
       const d = annoDraft; annoDraft = null;
-      const ok = d.type === "box" ? (d.w > 0.012 && d.h > 0.012) : (Math.hypot(d.x2 - d.x1, d.y2 - d.y1) > 0.02);
-      if (ok) { annoWork.push(d); annoSel = annoWork.length - 1; pushHistory(); }
-      redraw(); return;
+      const ok = d.type === "box" ? (d.w > 0.01 && d.h > 0.01) : (Math.hypot(d.x2 - d.x1, d.y2 - d.y1) > 0.015);
+      if (ok) { annoWork.push(d); setSel([annoWork.length - 1]); if (d.type === "arrow") { pinEndpointIfOver(d, 1); pinEndpointIfOver(d, 2); } pushHistory(); }
+      resetToSelect(); redraw(); return;
     }
-    if (annoDrag) { annoDrag = null; pushHistory(); }
+    if (A.kind === "band") { updateToolbar(); redraw(); return; }
+    if (A.kind === "resize") { pushHistory(); redraw(); return; }
+    if (A.kind === "endpoint") { pinEndpointIfOver(annoWork[A.i], A.end); pushHistory(); redraw(); return; }
+    if (A.kind === "arrowHandle") { pinEndpointIfOver(annoWork[A.i], A.end); pushHistory(); resetToSelect(); redraw(); return; }
+    if (A.kind === "move") { pushHistory(); redraw(); return; }
   }
 
   function ensureModal() {
     if (modalEls) return modalEls;
     const canvas = h("canvas", { id: "annoCanvas" });
+    const input = h("textarea", { class: "anno-input", rows: "1", style: "display:none" });
+    input.addEventListener("keydown", (e) => {
+      e.stopPropagation();   // Enter adds a newline; ⌘/Ctrl+Enter or click-away commits
+      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); commitTextEdit(); }
+      else if (e.key === "Escape") { e.preventDefault(); cancelTextEdit(); }
+    });
+    input.addEventListener("input", () => { if (annoTextEdit) positionTextInput(annoWork[annoTextEdit.i]); });
+    input.addEventListener("blur", () => { if (annoTextEdit) commitTextEdit(); });
     const toolBtns = {};
     const toolbar = h("div", { class: "modal-bar" });
-    TOOLS.forEach(([id, label]) => {
-      const b = h("button", { class: "tool", onclick: () => { annoTool = id; annoSel = -1; updateToolbar(); redraw(); } }, label);
+    TOOLS.forEach(([id, label, key]) => {
+      const b = h("button", { class: "tool", title: `${id} (${key})`, onclick: () => setTool(id) }, label, h("span", { class: "kbd" }, key));
       toolBtns[id] = b; toolbar.append(b);
     });
     toolbar.append(h("span", { class: "sep" }));
     const swatchEls = [];
     COLORS.forEach((c) => {
-      const s = h("button", { class: "swatch", style: `background:${c}`, title: c, onclick: () => { annoColor = c; if (annoSel >= 0) { annoWork[annoSel].color = c; pushHistory(); } updateColors(); redraw(); } });
+      const s = h("button", { class: "swatch", style: `background:${c}`, title: c, onclick: () => { annoColor = c; if (annoSel.size) { annoSel.forEach((i) => annoWork[i].color = c); pushHistory(); } updateColors(); redraw(); } });
       s._c = c; swatchEls.push(s); toolbar.append(s);
     });
     toolbar.append(h("span", { class: "sep" }));
-    const undoBtn = h("button", { class: "tool", title: "Undo (⌘/Ctrl+Z)", onclick: undo }, "↶ Undo");
-    const redoBtn = h("button", { class: "tool", title: "Redo (⌘/Ctrl+Shift+Z)", onclick: redo }, "↷ Redo");
-    const delBtn = h("button", { class: "tool", title: "Delete selected (Del)", onclick: deleteSel }, "🗑 Delete");
+    const undoBtn = h("button", { class: "tool", title: "Undo", onclick: undo }, "↶ Undo", h("span", { class: "kbd" }, "⌘Z"));
+    const redoBtn = h("button", { class: "tool", title: "Redo", onclick: redo }, "↷ Redo", h("span", { class: "kbd" }, "⌘⇧Z"));
+    const delBtn = h("button", { class: "tool", title: "Delete selected", onclick: deleteSel }, "🗑 Delete", h("span", { class: "kbd" }, "Del"));
     const clrBtn = h("button", { class: "tool", onclick: clearAnno }, "Clear all");
-    toolbar.append(undoBtn, redoBtn, delBtn, clrBtn);
+    const moreBtn = h("button", { class: "tool", title: "More space around the image", onclick: () => expandArea(0.4) }, "⤢ +space");
+    const lessBtn = h("button", { class: "tool", title: "Less space around the image", onclick: () => expandArea(-0.4) }, "− space");
+    toolbar.append(undoBtn, redoBtn, delBtn, clrBtn, h("span", { class: "sep" }), moreBtn, lessBtn);
     const foot = h("div", { class: "modal-foot" },
-      h("span", { class: "modal-hint" }, "Drag to draw · click a mark to select & move · Del removes · ⌘Z undo"),
+      h("span", { class: "modal-hint" }, "drag to draw or box-select · drag handles to link arrows/labels · double-click a label to edit (Enter = new line, ⌘↵ done)"),
       h("div", { style: "display:flex;gap:8px" },
         h("button", { onclick: () => closeAnnotator(false) }, "Cancel"),
         h("button", { class: "primary", onclick: () => closeAnnotator(true) }, "Done"),
       ),
     );
-    const modal = h("div", { class: "modal" }, toolbar, h("div", { class: "modal-canvas-wrap" }, canvas), foot);
+    const modal = h("div", { class: "modal" }, toolbar, h("div", { class: "modal-canvas-wrap" }, canvas, input), foot);
     const backdrop = h("div", { class: "modal-backdrop", onclick: (e) => { if (e.target === backdrop) closeAnnotator(false); } }, modal);
     document.body.append(backdrop);
     canvas.addEventListener("pointerdown", onAnnoDown);
     canvas.addEventListener("pointermove", onAnnoMove);
     canvas.addEventListener("pointerup", onAnnoUp);
-    modalEls = { backdrop, canvas, ctx: canvas.getContext("2d"), toolBtns, swatchEls, undoBtn, redoBtn, delBtn };
+    canvas.addEventListener("dblclick", (e) => {
+      if (annoTool !== "select") return;
+      const { dx, dy } = evtPos(e);
+      for (let i = annoWork.length - 1; i >= 0; i--) { if (annoWork[i].type === "text" && annoHit(annoWork[i], dx, dy)) { setSel([i]); startTextEdit(i, false); redraw(); return; } }
+    });
+    modalEls = { backdrop, canvas, input, ctx: canvas.getContext("2d"), toolBtns, swatchEls, undoBtn, redoBtn, delBtn };
     return modalEls;
   }
+
+  // size the editor canvas = image plus `annoMargin` of editable space (and any out-of-image marks)
+  function layoutModalCanvas() {
+    const slot = annoSlot, m = modalEls, M = annoMargin, ext = annsExtent(annoWork);
+    const x0 = Math.min(ext.x0, 0) - M, y0 = Math.min(ext.y0, 0) - M, x1 = Math.max(ext.x1, 1) + M, y1 = Math.max(ext.y1, 1) + M;
+    const regWu = x1 - x0, regHu = y1 - y0;
+    const maxW = Math.min(window.innerWidth - 80, 1100), maxH = window.innerHeight * 0.6;
+    const s = Math.min(maxW / (regWu * slot.w), maxH / (regHu * slot.h));
+    annoDispW = Math.round(regWu * slot.w * s); annoDispH = Math.round(regHu * slot.h * s);
+    annoImgRect = { x: (0 - x0) * slot.w * s, y: (0 - y0) * slot.h * s, w: slot.w * s, h: slot.h * s };
+    annoDPR = window.devicePixelRatio || 1;
+    m.canvas.width = annoDispW * annoDPR; m.canvas.height = annoDispH * annoDPR;
+    m.canvas.style.width = annoDispW + "px"; m.canvas.style.height = annoDispH + "px";
+  }
+  function expandArea(d) { annoMargin = Math.max(0.1, annoMargin + d); layoutModalCanvas(); redraw(); }
 
   function openAnnotator(slot, btn) {
     if (!slot.img) return;
     const m = ensureModal();
     annoSlot = slot; annoBtnRef = btn;
-    annoWork = cloneAnns(slot.annotations);
-    annoTool = "select"; annoColor = "#ef4444"; annoSel = -1; annoDraft = null; annoDrag = null;
+    annoWork = cloneAnns(slot.annotations); annoWork.forEach((a) => { if (!a.id) a.id = uid(); });
+    annoTool = "select"; annoColor = "#ef4444"; setSel([]); annoDraft = null; annoAction = null; annoTextEdit = null;
     annoHist = []; annoHistIdx = -1; pushHistory();
-    const maxW = Math.min(window.innerWidth - 80, 1000), maxH = window.innerHeight * 0.62;
-    const s = Math.min(maxW / slot.w, maxH / slot.h);
-    annoDispW = Math.round(slot.w * s); annoDispH = Math.round(slot.h * s);
-    annoDPR = window.devicePixelRatio || 1;
-    m.canvas.width = annoDispW * annoDPR; m.canvas.height = annoDispH * annoDPR;
-    m.canvas.style.width = annoDispW + "px"; m.canvas.style.height = annoDispH + "px";
+    annoMargin = 0.3;
+    layoutModalCanvas();
+    m.input.style.display = "none";
     m.backdrop.classList.add("open");
     updateToolbar(); updateColors(); updateUndoRedo(); redraw();
   }
   function closeAnnotator(commit) {
     if (!modalEls) return;
+    if (annoTextEdit) commitTextEdit();
     modalEls.backdrop.classList.remove("open");
     if (commit && annoSlot) {
       annoSlot.annotations = annoWork;
@@ -1177,12 +1447,13 @@
     annoSlot = null; annoBtnRef = null;
   }
   document.addEventListener("keydown", (e) => {
-    if (!modalEls || !modalEls.backdrop.classList.contains("open")) return;
+    if (!modalEls || !modalEls.backdrop.classList.contains("open") || annoTextEdit) return;
     if (e.key === "Escape") closeAnnotator(false);
     else if (e.key === "Enter") closeAnnotator(true);
     else if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); deleteSel(); }
     else if ((e.metaKey || e.ctrlKey) && (e.key === "z" || e.key === "Z")) { e.preventDefault(); e.shiftKey ? redo() : undo(); }
     else if ((e.metaKey || e.ctrlKey) && (e.key === "y" || e.key === "Y")) { e.preventDefault(); redo(); }
+    else if (e.key >= "1" && e.key <= "5" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); setTool(TOOL_KEYS[+e.key - 1]); }
   });
 
   // ---------- global controls ----------
