@@ -117,6 +117,24 @@
     opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;z-index:100;max-width:90vw;
   }
   .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+  .anno-btn{width:100%;margin-bottom:2px}
+  .anno-btn:disabled{opacity:.5;cursor:not-allowed}
+  .modal-backdrop{position:fixed;inset:0;background:rgba(15,23,42,.55);display:none;align-items:center;justify-content:center;z-index:200;padding:20px}
+  .modal-backdrop.open{display:flex}
+  .modal{background:#fff;border-radius:14px;max-width:96vw;max-height:96vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 30px 80px rgba(0,0,0,.4)}
+  .modal-bar{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:12px 14px;border-bottom:1px solid var(--line)}
+  .modal-bar .sep{width:1px;height:26px;background:var(--line);margin:0 4px}
+  .tool{padding:7px 11px;border:1px solid var(--line);border-radius:8px;background:#fff;font-weight:600;font-size:13px;color:var(--ink)}
+  .tool:hover{background:#f8fafc}
+  .tool.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .swatch{width:22px;height:22px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 0 1px var(--line);cursor:pointer;padding:0}
+  .swatch.active{box-shadow:0 0 0 2px var(--accent)}
+  .modal-canvas-wrap{padding:16px;overflow:auto;background:#f1f5f9;display:flex;align-items:center;justify-content:center;min-height:0}
+  #annoCanvas{display:block;background:#fff;border-radius:6px;box-shadow:0 4px 18px rgba(0,0,0,.15);touch-action:none}
+  #annoCanvas.draw{cursor:crosshair}
+  .modal-foot{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:12px 14px;border-top:1px solid var(--line)}
+  .modal-hint{color:var(--muted);font-size:12px}
   .dims{font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
   .canvas-wrap{
     background:
@@ -216,7 +234,7 @@
 
   // ---------- state ----------
   const uid = () => Math.random().toString(36).slice(2, 9);
-  const newSlot = () => ({ caption: "", img: null, dataUrl: null, w: 0, h: 0, _el: null });
+  const newSlot = () => ({ caption: "", img: null, dataUrl: null, w: 0, h: 0, annotations: [], _el: null });
   const newPair = () => ({ id: uid(), before: newSlot(), after: newSlot() });
   const newChange = () => ({ id: uid(), title: "", pairs: [newPair()] });
   const todayStr = () => new Date().toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
@@ -248,8 +266,8 @@
       changes: state.changes.map((ch) => ({
         title: ch.title,
         pairs: ch.pairs.map((p) => ({
-          before: { caption: p.before.caption, dataUrl: p.before.dataUrl },
-          after: { caption: p.after.caption, dataUrl: p.after.dataUrl },
+          before: { caption: p.before.caption, dataUrl: p.before.dataUrl, annotations: p.before.annotations },
+          after: { caption: p.after.caption, dataUrl: p.after.dataUrl, annotations: p.after.annotations },
         })),
       })),
     };
@@ -266,6 +284,7 @@
     const s = newSlot();
     s.caption = d.caption || "";
     s.dataUrl = d.dataUrl || null;
+    s.annotations = Array.isArray(d.annotations) ? d.annotations.map((a) => ({ ...a })) : [];
     return s;
   }
   function applyState(d) {
@@ -303,7 +322,7 @@
       [p.before, p.after].forEach((s) => {
         if (s.dataUrl && !s.img) {
           const img = new Image();
-          img.onload = () => { s.img = img; s.w = img.naturalWidth; s.h = img.naturalHeight; drawPreview(); };
+          img.onload = () => { s.img = img; s.w = img.naturalWidth; s.h = img.naturalHeight; refreshSlot(s); drawPreview(); };
           img.src = s.dataUrl;
         }
       });
@@ -412,6 +431,7 @@
       el.style.backgroundImage = "";
       el.innerHTML = `<span class="hint"><b>Click to select</b><br>then paste, or drop / browse an image</span>`;
     }
+    if (slot._annoBtn) { slot._annoBtn.disabled = !slot.img; slot._annoBtn.textContent = annoLabel(slot); }
   }
   function setPasteTarget(el, obj) {
     if (activePaste && activePaste.el) activePaste.el.classList.remove("paste-target");
@@ -456,6 +476,13 @@
       oninput: (e) => { slot.caption = e.target.value; drawPreview(); },
     });
 
+    const annoBtn = h("button", {
+      class: "anno-btn tiny", disabled: slot.img ? null : "",
+      title: "Draw boxes, arrows, numbers and labels on this image",
+      onclick: () => openAnnotator(slot, annoBtn),
+    }, annoLabel(slot));
+    slot._annoBtn = annoBtn;
+
     return h("div", { class: `img-col ${kind}` },
       h("span", { class: "col-tag" }, labelText),
       drop, file,
@@ -463,6 +490,7 @@
         h("button", { class: "tiny", onclick: () => file.click() }, "Browse"),
         h("button", { class: "tiny", onclick: () => clearSlot(slot) }, "Clear"),
       ),
+      annoBtn,
       cap,
     );
   }
@@ -552,6 +580,7 @@
   // ---------- layout + canvas rendering ----------
   const meas = document.createElement("canvas").getContext("2d");
   const FAMILY = `system-ui,-apple-system,"Segoe UI",Roboto,sans-serif`;
+  const SVG_FAM = FAMILY.replace(/"/g, "'");
   const font = (weight, size) => `${weight} ${size}px ${FAMILY}`;
 
   function wrap(text, f, maxW) {
@@ -607,7 +636,7 @@
     let cy = y;
     items.push({ kind: "badge", cx: x + cw / 2, y: cy, w: badgeW, h: badgeH, text: labelText, size: C.LABEL, bg, fg });
     cy += badgeH + C.labelGap;
-    items.push({ kind: "image", img: slot.img, x: ix, y: cy, w: iw, h: ih });
+    items.push({ kind: "image", img: slot.img, x: ix, y: cy, w: iw, h: ih, annotations: slot.annotations });
     cy += ih;
     if ((slot.caption || "").trim()) {
       cy += C.capGap;
@@ -698,6 +727,7 @@
           ctx.drawImage(it.img, it.x, it.y, it.w, it.h); ctx.restore();
           ctx.save(); rr(ctx, it.x, it.y, it.w, it.h, C.radius);
           ctx.strokeStyle = "rgba(15,23,42,.12)"; ctx.lineWidth = 1.5; ctx.stroke(); ctx.restore();
+          drawAnnotations(ctx, { x: it.x, y: it.y, w: it.w, h: it.h }, it.annotations);
         } else {
           ctx.save(); rr(ctx, it.x, it.y, it.w, it.h, C.radius);
           ctx.fillStyle = "#f1f5f9"; ctx.fill();
@@ -811,6 +841,7 @@
         out.push(`<clipPath id="${id}"><rect x="${it.x}" y="${it.y}" width="${it.w}" height="${it.h}" rx="${C.radius}"/></clipPath>`);
         out.push(`<image x="${it.x}" y="${it.y}" width="${it.w}" height="${it.h}" preserveAspectRatio="none" clip-path="url(#${id})" xlink:href="${it.img.src}"/>`);
         out.push(`<rect x="${it.x}" y="${it.y}" width="${it.w}" height="${it.h}" rx="${C.radius}" fill="none" stroke="rgba(15,23,42,0.12)" stroke-width="1.5"/>`);
+        (it.annotations || []).forEach((a) => annoPrimitives({ x: it.x, y: it.y, w: it.w, h: it.h }, a).forEach((p) => out.push(svgPrim(p))));
       } else if (it.kind === "image") {
         out.push(`<rect x="${it.x}" y="${it.y}" width="${it.w}" height="${it.h}" rx="${C.radius}" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="2" stroke-dasharray="8 6"/>`);
         out.push(`<text x="${it.x + it.w / 2}" y="${it.y + it.h / 2}" font-family="${fam}" font-size="18" font-weight="500" fill="#94a3b8" text-anchor="middle" dominant-baseline="central">No image</text>`);
@@ -819,6 +850,71 @@
     out.push("</svg>");
     return out.join("");
   }
+
+  // ---- annotations: one set of geometry primitives, drawn to canvas OR serialized to SVG ----
+  function annoPrimitives(rect, a) {
+    const k = rect.w / 560;
+    const col = a.color || "#ef4444";
+    const sw = Math.max(2.5, 4 * k);
+    const X = (n) => rect.x + n * rect.w, Y = (n) => rect.y + n * rect.h;
+    if (a.type === "box") {
+      return [{ k: "rect", x: X(a.x), y: Y(a.y), w: a.w * rect.w, h: a.h * rect.h, stroke: col, sw }];
+    }
+    if (a.type === "arrow") {
+      const x1 = X(a.x1), y1 = Y(a.y1), x2 = X(a.x2), y2 = Y(a.y2);
+      const ang = Math.atan2(y2 - y1, x2 - x1), hl = Math.max(13, 18 * k);
+      return [
+        { k: "line", x1, y1, x2, y2, stroke: col, sw },
+        { k: "poly", pts: [[x2, y2], [x2 - hl * Math.cos(ang - 0.45), y2 - hl * Math.sin(ang - 0.45)], [x2 - hl * Math.cos(ang + 0.45), y2 - hl * Math.sin(ang + 0.45)]], fill: col },
+      ];
+    }
+    if (a.type === "number") {
+      const cx = X(a.x), cy = Y(a.y), r = Math.max(13, 20 * k);
+      return [
+        { k: "circle", cx, cy, r, fill: col },
+        { k: "text", x: cx, y: cy, text: String(a.n), size: r * 1.25, fill: "#fff", anchor: "center", baseline: "middle", weight: 700 },
+      ];
+    }
+    if (a.type === "text") {
+      const size = Math.max(15, 22 * k), padX = 10 * k, padY = 6 * k;
+      meas.font = font(700, size);
+      const tw = meas.measureText(a.text || "").width;
+      const x = X(a.x), y = Y(a.y), w = tw + padX * 2, hh = size + padY * 2;
+      return [
+        { k: "pill", x, y, w, h: hh, fill: col },
+        { k: "text", x: x + padX, y: y + hh / 2, text: a.text || "", size, fill: "#fff", anchor: "start", baseline: "middle", weight: 700 },
+      ];
+    }
+    return [];
+  }
+  function drawPrim(ctx, p) {
+    if (p.k === "rect") { ctx.lineWidth = p.sw; ctx.strokeStyle = p.stroke; ctx.strokeRect(p.x, p.y, p.w, p.h); }
+    else if (p.k === "line") { ctx.lineWidth = p.sw; ctx.strokeStyle = p.stroke; ctx.lineCap = "round"; ctx.beginPath(); ctx.moveTo(p.x1, p.y1); ctx.lineTo(p.x2, p.y2); ctx.stroke(); ctx.lineCap = "butt"; }
+    else if (p.k === "poly") { ctx.fillStyle = p.fill; ctx.beginPath(); p.pts.forEach((pt, i) => (i ? ctx.lineTo(pt[0], pt[1]) : ctx.moveTo(pt[0], pt[1]))); ctx.closePath(); ctx.fill(); }
+    else if (p.k === "circle") { ctx.fillStyle = p.fill; ctx.beginPath(); ctx.arc(p.cx, p.cy, p.r, 0, Math.PI * 2); ctx.fill(); }
+    else if (p.k === "pill") { rr(ctx, p.x, p.y, p.w, p.h, p.h / 2); ctx.fillStyle = p.fill; ctx.fill(); }
+    else if (p.k === "text") {
+      ctx.font = font(p.weight || 400, p.size); ctx.fillStyle = p.fill;
+      ctx.textAlign = p.anchor === "center" ? "center" : "start";
+      ctx.textBaseline = p.baseline || "alphabetic";
+      ctx.fillText(p.text, p.x, p.y);
+      ctx.textAlign = "start"; ctx.textBaseline = "top";
+    }
+  }
+  function svgPrim(p) {
+    if (p.k === "rect") return `<rect x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" fill="none" stroke="${p.stroke}" stroke-width="${p.sw}"/>`;
+    if (p.k === "line") return `<line x1="${p.x1}" y1="${p.y1}" x2="${p.x2}" y2="${p.y2}" stroke="${p.stroke}" stroke-width="${p.sw}" stroke-linecap="round"/>`;
+    if (p.k === "poly") return `<polygon points="${p.pts.map((pt) => pt.join(",")).join(" ")}" fill="${p.fill}"/>`;
+    if (p.k === "circle") return `<circle cx="${p.cx}" cy="${p.cy}" r="${p.r}" fill="${p.fill}"/>`;
+    if (p.k === "pill") return `<rect x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" rx="${p.h / 2}" fill="${p.fill}"/>`;
+    if (p.k === "text") {
+      const anchor = p.anchor === "center" ? "middle" : "start";
+      const db = p.baseline === "middle" ? "central" : "alphabetic";
+      return `<text x="${p.x}" y="${p.y}" font-family="${SVG_FAM}" font-size="${p.size}" font-weight="${p.weight || 400}" fill="${p.fill}" text-anchor="${anchor}" dominant-baseline="${db}">${svgEsc(p.text)}</text>`;
+    }
+    return "";
+  }
+  const drawAnnotations = (ctx, rect, anns) => (anns || []).forEach((a) => annoPrimitives(rect, a).forEach((p) => drawPrim(ctx, p)));
 
   // ---- project save / open (.json, images included) ----
   function saveProject() {
@@ -877,6 +973,217 @@
       dropdown("⬇ Download", "primary", [{ items: downloadItems(() => slug(state.title), () => state.title, () => state.changes) }]),
     );
   }
+
+  // ---------- annotation editor (modal) ----------
+  const annoLabel = (slot) => `✏ Annotate${slot.annotations.length ? ` (${slot.annotations.length})` : ""}`;
+  const COLORS = ["#ef4444", "#f59e0b", "#22c55e", "#3b82f6", "#a855f7", "#111827", "#ffffff"];
+  const TOOLS = [["select", "Select"], ["box", "▭ Box"], ["arrow", "↗ Arrow"], ["number", "① Number"], ["text", "T Text"]];
+
+  let modalEls = null;
+  let annoSlot = null, annoBtnRef = null;
+  let annoWork = [], annoTool = "select", annoColor = "#ef4444", annoSel = -1;
+  let annoDraft = null, annoDrag = null, annoDragStart = null;
+  let annoHist = [], annoHistIdx = -1;
+  let annoDispW = 0, annoDispH = 0, annoDPR = 1;
+
+  const rectFull = () => ({ x: 0, y: 0, w: annoDispW, h: annoDispH });
+  const cloneAnns = (arr) => arr.map((a) => ({ ...a }));
+  const clamp01 = (v) => Math.max(0, Math.min(1, v));
+
+  function distSeg(px, py, x1, y1, x2, y2) {
+    const dx = x2 - x1, dy = y2 - y1, l2 = dx * dx + dy * dy || 1;
+    let t = ((px - x1) * dx + (py - y1) * dy) / l2; t = Math.max(0, Math.min(1, t));
+    return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
+  }
+  function annoHit(a, dx, dy, rect) {
+    const k = rect.w / 560, X = (n) => rect.x + n * rect.w, Y = (n) => rect.y + n * rect.h;
+    if (a.type === "box") { const x = X(a.x), y = Y(a.y); return dx >= x && dx <= x + a.w * rect.w && dy >= y && dy <= y + a.h * rect.h; }
+    if (a.type === "number") { const r = Math.max(13, 20 * k); return Math.hypot(dx - X(a.x), dy - Y(a.y)) <= r; }
+    if (a.type === "text") { const size = Math.max(15, 22 * k), padX = 10 * k, padY = 6 * k; meas.font = font(700, size); const tw = meas.measureText(a.text || "").width; const x = X(a.x), y = Y(a.y); return dx >= x && dx <= x + tw + padX * 2 && dy >= y && dy <= y + size + padY * 2; }
+    if (a.type === "arrow") { const k2 = Math.max(8, 6 * k); return distSeg(dx, dy, X(a.x1), Y(a.y1), X(a.x2), Y(a.y2)) <= k2; }
+    return false;
+  }
+  function primsBBox(prims) {
+    let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
+    const ext = (x, y) => { a = Math.min(a, x); b = Math.min(b, y); c = Math.max(c, x); d = Math.max(d, y); };
+    prims.forEach((p) => {
+      if (p.k === "rect" || p.k === "pill") { ext(p.x, p.y); ext(p.x + p.w, p.y + p.h); }
+      else if (p.k === "line") { ext(p.x1, p.y1); ext(p.x2, p.y2); }
+      else if (p.k === "circle") { ext(p.cx - p.r, p.cy - p.r); ext(p.cx + p.r, p.cy + p.r); }
+      else if (p.k === "poly") { p.pts.forEach((pt) => ext(pt[0], pt[1])); }
+    });
+    return { x: a, y: b, w: c - a, h: d - b };
+  }
+
+  function pushHistory() {
+    annoHist = annoHist.slice(0, annoHistIdx + 1);
+    annoHist.push(cloneAnns(annoWork));
+    if (annoHist.length > 60) annoHist.shift();
+    annoHistIdx = annoHist.length - 1;
+    updateUndoRedo();
+  }
+  function undo() { if (annoHistIdx <= 0) return; annoHistIdx--; annoWork = cloneAnns(annoHist[annoHistIdx]); annoSel = -1; redraw(); updateUndoRedo(); }
+  function redo() { if (annoHistIdx >= annoHist.length - 1) return; annoHistIdx++; annoWork = cloneAnns(annoHist[annoHistIdx]); annoSel = -1; redraw(); updateUndoRedo(); }
+  function deleteSel() { if (annoSel < 0) return; annoWork.splice(annoSel, 1); annoSel = -1; pushHistory(); redraw(); }
+  function clearAnno() { if (!annoWork.length) return; annoWork = []; annoSel = -1; pushHistory(); redraw(); }
+
+  function updateToolbar() {
+    const m = modalEls; if (!m) return;
+    Object.entries(m.toolBtns).forEach(([id, b]) => b.classList.toggle("active", id === annoTool));
+    m.canvas.classList.toggle("draw", annoTool !== "select");
+    m.delBtn.disabled = annoSel < 0;
+  }
+  function updateColors() { modalEls && modalEls.swatchEls.forEach((s) => s.classList.toggle("active", s._c === annoColor)); }
+  function updateUndoRedo() {
+    const m = modalEls; if (!m) return;
+    m.undoBtn.disabled = annoHistIdx <= 0;
+    m.redoBtn.disabled = annoHistIdx >= annoHist.length - 1;
+    m.delBtn.disabled = annoSel < 0;
+  }
+
+  function redraw() {
+    const m = modalEls; if (!m || !annoSlot) return;
+    const ctx = m.ctx;
+    ctx.setTransform(annoDPR, 0, 0, annoDPR, 0, 0);
+    ctx.clearRect(0, 0, annoDispW, annoDispH);
+    ctx.drawImage(annoSlot.img, 0, 0, annoDispW, annoDispH);
+    const rect = rectFull();
+    annoWork.forEach((a) => annoPrimitives(rect, a).forEach((p) => drawPrim(ctx, p)));
+    if (annoDraft) annoPrimitives(rect, annoDraft).forEach((p) => drawPrim(ctx, p));
+    if (annoSel >= 0 && annoWork[annoSel]) {
+      const bb = primsBBox(annoPrimitives(rect, annoWork[annoSel])), pad = 4;
+      ctx.save(); ctx.strokeStyle = "#4f46e5"; ctx.lineWidth = 1.5; ctx.setLineDash([5, 4]);
+      ctx.strokeRect(bb.x - pad, bb.y - pad, bb.w + pad * 2, bb.h + pad * 2); ctx.restore();
+    }
+  }
+
+  function onAnnoDown(e) {
+    e.preventDefault(); try { modalEls.canvas.setPointerCapture(e.pointerId); } catch (_) {}
+    const r = modalEls.canvas.getBoundingClientRect();
+    const dx = e.clientX - r.left, dy = e.clientY - r.top, rect = rectFull();
+    const nx = clamp01(dx / annoDispW), ny = clamp01(dy / annoDispH);
+    if (annoTool === "select") {
+      let hit = -1;
+      for (let i = annoWork.length - 1; i >= 0; i--) { if (annoHit(annoWork[i], dx, dy, rect)) { hit = i; break; } }
+      annoSel = hit;
+      annoDrag = hit >= 0 ? { startNX: nx, startNY: ny, orig: { ...annoWork[hit] } } : null;
+      updateToolbar(); updateUndoRedo(); redraw(); return;
+    }
+    if (annoTool === "number") {
+      const n = annoWork.filter((a) => a.type === "number").length + 1;
+      annoWork.push({ type: "number", x: nx, y: ny, n, color: annoColor }); annoSel = annoWork.length - 1;
+      pushHistory(); redraw(); return;
+    }
+    if (annoTool === "text") {
+      const t = prompt("Label text:");
+      if (t && t.trim()) { annoWork.push({ type: "text", x: nx, y: ny, text: t.trim(), color: annoColor }); annoSel = annoWork.length - 1; pushHistory(); }
+      redraw(); return;
+    }
+    annoDragStart = { nx, ny };
+    annoDraft = annoTool === "box"
+      ? { type: "box", x: nx, y: ny, w: 0, h: 0, color: annoColor }
+      : { type: "arrow", x1: nx, y1: ny, x2: nx, y2: ny, color: annoColor };
+  }
+  function onAnnoMove(e) {
+    if (!annoDraft && !annoDrag) return;
+    const r = modalEls.canvas.getBoundingClientRect();
+    const nx = clamp01((e.clientX - r.left) / annoDispW), ny = clamp01((e.clientY - r.top) / annoDispH);
+    if (annoDraft) {
+      if (annoDraft.type === "box") {
+        annoDraft.x = Math.min(annoDragStart.nx, nx); annoDraft.y = Math.min(annoDragStart.ny, ny);
+        annoDraft.w = Math.abs(nx - annoDragStart.nx); annoDraft.h = Math.abs(ny - annoDragStart.ny);
+      } else { annoDraft.x2 = nx; annoDraft.y2 = ny; }
+      redraw(); return;
+    }
+    if (annoDrag && annoSel >= 0) {
+      const a = annoWork[annoSel], o = annoDrag.orig, ddx = nx - annoDrag.startNX, ddy = ny - annoDrag.startNY;
+      if (a.type === "arrow") { a.x1 = o.x1 + ddx; a.y1 = o.y1 + ddy; a.x2 = o.x2 + ddx; a.y2 = o.y2 + ddy; }
+      else { a.x = o.x + ddx; a.y = o.y + ddy; }
+      redraw();
+    }
+  }
+  function onAnnoUp() {
+    if (annoDraft) {
+      const d = annoDraft; annoDraft = null;
+      const ok = d.type === "box" ? (d.w > 0.012 && d.h > 0.012) : (Math.hypot(d.x2 - d.x1, d.y2 - d.y1) > 0.02);
+      if (ok) { annoWork.push(d); annoSel = annoWork.length - 1; pushHistory(); }
+      redraw(); return;
+    }
+    if (annoDrag) { annoDrag = null; pushHistory(); }
+  }
+
+  function ensureModal() {
+    if (modalEls) return modalEls;
+    const canvas = h("canvas", { id: "annoCanvas" });
+    const toolBtns = {};
+    const toolbar = h("div", { class: "modal-bar" });
+    TOOLS.forEach(([id, label]) => {
+      const b = h("button", { class: "tool", onclick: () => { annoTool = id; annoSel = -1; updateToolbar(); redraw(); } }, label);
+      toolBtns[id] = b; toolbar.append(b);
+    });
+    toolbar.append(h("span", { class: "sep" }));
+    const swatchEls = [];
+    COLORS.forEach((c) => {
+      const s = h("button", { class: "swatch", style: `background:${c}`, title: c, onclick: () => { annoColor = c; if (annoSel >= 0) { annoWork[annoSel].color = c; pushHistory(); } updateColors(); redraw(); } });
+      s._c = c; swatchEls.push(s); toolbar.append(s);
+    });
+    toolbar.append(h("span", { class: "sep" }));
+    const undoBtn = h("button", { class: "tool", title: "Undo (⌘/Ctrl+Z)", onclick: undo }, "↶ Undo");
+    const redoBtn = h("button", { class: "tool", title: "Redo (⌘/Ctrl+Shift+Z)", onclick: redo }, "↷ Redo");
+    const delBtn = h("button", { class: "tool", title: "Delete selected (Del)", onclick: deleteSel }, "🗑 Delete");
+    const clrBtn = h("button", { class: "tool", onclick: clearAnno }, "Clear all");
+    toolbar.append(undoBtn, redoBtn, delBtn, clrBtn);
+    const foot = h("div", { class: "modal-foot" },
+      h("span", { class: "modal-hint" }, "Drag to draw · click a mark to select & move · Del removes · ⌘Z undo"),
+      h("div", { style: "display:flex;gap:8px" },
+        h("button", { onclick: () => closeAnnotator(false) }, "Cancel"),
+        h("button", { class: "primary", onclick: () => closeAnnotator(true) }, "Done"),
+      ),
+    );
+    const modal = h("div", { class: "modal" }, toolbar, h("div", { class: "modal-canvas-wrap" }, canvas), foot);
+    const backdrop = h("div", { class: "modal-backdrop", onclick: (e) => { if (e.target === backdrop) closeAnnotator(false); } }, modal);
+    document.body.append(backdrop);
+    canvas.addEventListener("pointerdown", onAnnoDown);
+    canvas.addEventListener("pointermove", onAnnoMove);
+    canvas.addEventListener("pointerup", onAnnoUp);
+    modalEls = { backdrop, canvas, ctx: canvas.getContext("2d"), toolBtns, swatchEls, undoBtn, redoBtn, delBtn };
+    return modalEls;
+  }
+
+  function openAnnotator(slot, btn) {
+    if (!slot.img) return;
+    const m = ensureModal();
+    annoSlot = slot; annoBtnRef = btn;
+    annoWork = cloneAnns(slot.annotations);
+    annoTool = "select"; annoColor = "#ef4444"; annoSel = -1; annoDraft = null; annoDrag = null;
+    annoHist = []; annoHistIdx = -1; pushHistory();
+    const maxW = Math.min(window.innerWidth - 80, 1000), maxH = window.innerHeight * 0.62;
+    const s = Math.min(maxW / slot.w, maxH / slot.h);
+    annoDispW = Math.round(slot.w * s); annoDispH = Math.round(slot.h * s);
+    annoDPR = window.devicePixelRatio || 1;
+    m.canvas.width = annoDispW * annoDPR; m.canvas.height = annoDispH * annoDPR;
+    m.canvas.style.width = annoDispW + "px"; m.canvas.style.height = annoDispH + "px";
+    m.backdrop.classList.add("open");
+    updateToolbar(); updateColors(); updateUndoRedo(); redraw();
+  }
+  function closeAnnotator(commit) {
+    if (!modalEls) return;
+    modalEls.backdrop.classList.remove("open");
+    if (commit && annoSlot) {
+      annoSlot.annotations = annoWork;
+      if (annoBtnRef) annoBtnRef.textContent = annoLabel(annoSlot);
+      drawPreview();
+    }
+    annoSlot = null; annoBtnRef = null;
+  }
+  document.addEventListener("keydown", (e) => {
+    if (!modalEls || !modalEls.backdrop.classList.contains("open")) return;
+    if (e.key === "Escape") closeAnnotator(false);
+    else if (e.key === "Enter") closeAnnotator(true);
+    else if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); deleteSel(); }
+    else if ((e.metaKey || e.ctrlKey) && (e.key === "z" || e.key === "Z")) { e.preventDefault(); e.shiftKey ? redo() : undo(); }
+    else if ((e.metaKey || e.ctrlKey) && (e.key === "y" || e.key === "Y")) { e.preventDefault(); redo(); }
+  });
 
   // ---------- global controls ----------
   const bind = (id, fn) => document.getElementById(id).addEventListener("input", fn);
