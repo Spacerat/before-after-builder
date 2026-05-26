@@ -885,16 +885,16 @@
 
   // ---- annotations: one set of geometry primitives, drawn to canvas OR serialized to SVG ----
   function annoPrimitives(rect, a) {
-    const k = rect.w / 560;
+    const k = rect.w / 560;   // sizes scale purely with the image (no min clamps) so the editor matches output at any zoom
     const col = a.color || "#ef4444";
-    const sw = Math.max(2.5, 4 * k);
+    const sw = 4 * k;
     const X = (n) => rect.x + n * rect.w, Y = (n) => rect.y + n * rect.h;
     if (a.type === "box") {
       return [{ k: "rect", x: X(a.x), y: Y(a.y), w: a.w * rect.w, h: a.h * rect.h, stroke: col, sw }];
     }
     if (a.type === "arrow") {
       const x1 = X(a.x1), y1 = Y(a.y1), x2 = X(a.x2), y2 = Y(a.y2);
-      const ang = Math.atan2(y2 - y1, x2 - x1), hl = Math.max(13, 18 * k);
+      const ang = Math.atan2(y2 - y1, x2 - x1), hl = 18 * k;
       const len = Math.hypot(x2 - x1, y2 - y1) || 1, cut = Math.min(hl * 0.9, len * 0.6);
       const bx = x2 - Math.cos(ang) * cut, by = y2 - Math.sin(ang) * cut;  // stop the line at the arrowhead base
       return [
@@ -903,14 +903,14 @@
       ];
     }
     if (a.type === "number") {
-      const cx = X(a.x), cy = Y(a.y), r = Math.max(13, 20 * k);
+      const cx = X(a.x), cy = Y(a.y), r = 20 * k;
       return [
         { k: "circle", cx, cy, r, fill: col },
         { k: "text", x: cx, y: cy, text: String(a.n), size: r * 1.25, fill: "#fff", anchor: "center", baseline: "middle", weight: 700 },
       ];
     }
     if (a.type === "text") {
-      const size = Math.max(15, 22 * k), tm = textMetrics(a.text, size), x = X(a.x), y = Y(a.y);
+      const size = 22 * k, tm = textMetrics(a.text, size), x = X(a.x), y = Y(a.y);
       const prims = [{ k: "pill", x, y, w: tm.w, h: tm.h, fill: col }];
       tm.lines.forEach((ln, i) => prims.push({ k: "text", x: x + tm.padX, y: y + tm.padY + tm.lineH * (i + 0.5), text: ln, size, fill: "#fff", anchor: "start", baseline: "middle", weight: 700 }));
       return prims;
@@ -1101,8 +1101,8 @@
   function annoHit(a, dx, dy) {
     const rect = annoImgRect, k = rect.w / 560, X = (n) => rect.x + n * rect.w, Y = (n) => rect.y + n * rect.h;
     if (a.type === "box") { const x = X(a.x), y = Y(a.y); return dx >= x && dx <= x + a.w * rect.w && dy >= y && dy <= y + a.h * rect.h; }
-    if (a.type === "number") { const r = Math.max(13, 20 * k); return Math.hypot(dx - X(a.x), dy - Y(a.y)) <= r; }
-    if (a.type === "text") { const size = Math.max(15, 22 * k), tm = textMetrics(a.text, size), x = X(a.x), y = Y(a.y); return dx >= x && dx <= x + tm.w && dy >= y && dy <= y + tm.h; }
+    if (a.type === "number") { const r = 20 * k; return Math.hypot(dx - X(a.x), dy - Y(a.y)) <= r; }
+    if (a.type === "text") { const tm = textMetrics(a.text, 22 * k), x = X(a.x), y = Y(a.y); return dx >= x && dx <= x + tm.w && dy >= y && dy <= y + tm.h; }
     if (a.type === "arrow") { const e = resolveArrowEnds(a, buildById(annoWork)); return distSeg(dx, dy, X(e.x1), Y(e.y1), X(e.x2), Y(e.y2)) <= Math.max(8, 6 * k); }
     return false;
   }
