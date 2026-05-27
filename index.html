@@ -133,8 +133,20 @@
   .swatch{width:22px;height:22px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 0 1px var(--line);cursor:pointer;padding:0}
   .swatch.active{box-shadow:0 0 0 2px var(--accent)}
   .modal-canvas-wrap{position:relative;padding:16px;overflow:auto;background:#f1f5f9;display:flex;align-items:center;justify-content:center;min-height:0}
-  #annoCanvas{display:block;background:#fff;border-radius:6px;box-shadow:0 4px 18px rgba(0,0,0,.15);touch-action:none}
-  #annoCanvas.draw{cursor:crosshair}
+  .anno-canvas{display:block;background:#fff;border-radius:6px;box-shadow:0 4px 18px rgba(0,0,0,.15);touch-action:none}
+  .anno-canvas.draw{cursor:crosshair}
+
+  .tabs{max-width:1400px;margin:0 auto 18px;display:flex;gap:4px;border-bottom:1px solid var(--line)}
+  .tab{border:none;background:transparent;padding:10px 16px;font-weight:700;color:var(--muted);border-radius:0;border-bottom:2px solid transparent;margin-bottom:-1px}
+  .tab:hover{background:transparent;color:var(--ink)}
+  .tab.active{color:var(--accent);border-bottom-color:var(--accent)}
+  .anno-page{max-width:1400px;margin:0 auto}
+  .anno-drop{border:2px dashed var(--line);border-radius:14px;background:#fff;padding:64px 20px;text-align:center;color:var(--muted)}
+  .anno-drop.drag{border-color:var(--accent);background:#eef2ff}
+  .anno-drop-title{font-size:18px;font-weight:800;color:var(--ink);margin-bottom:6px}
+  .linkish{border:none;background:transparent;color:var(--accent);font-weight:700;padding:0;text-decoration:underline}
+  .anno-editor{background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+  .anno-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:12px}
   .anno-input{position:absolute;z-index:5;box-sizing:border-box;border:none;border-radius:14px;padding:5px 11px;font-weight:700;font-family:inherit;line-height:1.2;color:#fff;outline:2px solid #fff;box-shadow:0 0 0 4px rgba(79,70,229,.5);width:auto;min-width:50px;resize:none;overflow:hidden;white-space:pre-wrap}
   .modal-foot{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:12px 14px;border-top:1px solid var(--line)}
   .modal-hint{color:var(--muted);font-size:12px}
@@ -158,6 +170,12 @@
   <p class="sub">Compose before/after screenshots into a single shareable PNG — entirely in your browser, nothing uploaded.</p>
 </header>
 
+<nav class="tabs">
+  <button class="tab active" data-tab="ba">◧ Before / After</button>
+  <button class="tab" data-tab="anno">✎ Annotator</button>
+</nav>
+
+<div id="tab-ba">
 <div class="app">
   <section class="editor">
     <div class="panel">
@@ -230,6 +248,23 @@
     </div>
   </aside>
 </div>
+</div>
+
+<div id="tab-anno" hidden>
+  <div class="anno-page">
+    <div id="annoDrop" class="anno-drop">
+      <div class="anno-drop-title">Annotate an image</div>
+      <p>Drop an image here, paste from your clipboard, or
+        <button id="annoBrowse" class="linkish">browse</button>.</p>
+      <input type="file" id="annoFile" accept="image/*" hidden>
+    </div>
+    <div id="annoEditor" class="anno-editor" hidden></div>
+    <div id="annoFoot" class="anno-foot" hidden>
+      <button id="annoReplace">↻ Replace image</button>
+      <div class="bar-actions" id="annoActions"></div>
+    </div>
+  </div>
+</div>
 
 <script>
 (() => {
@@ -273,6 +308,8 @@
           after: { caption: p.after.caption, dataUrl: p.after.dataUrl, annotations: p.after.annotations },
         })),
       })),
+      tab: currentTab,
+      anno: { dataUrl: annoDoc.dataUrl, annotations: annoDoc.annotations },
     };
   }
   const serialize = () => JSON.stringify(snapshot());
@@ -307,6 +344,10 @@
       })),
     }));
     if (!state.changes.length) state.changes = [newChange()];
+    currentTab = d.tab === "anno" ? "anno" : "ba";
+    annoDoc.img = null; annoDoc.w = 0; annoDoc.h = 0;
+    annoDoc.dataUrl = (d.anno && d.anno.dataUrl) || null;
+    annoDoc.annotations = (d.anno && Array.isArray(d.anno.annotations)) ? d.anno.annotations.map((a) => ({ ...a })) : [];
     return true;
   }
   function loadSaved() {
@@ -442,8 +483,14 @@
     el.classList.add("paste-target");
   }
   document.addEventListener("paste", (e) => {
-    if (!activePaste) return;
     const items = (e.clipboardData && e.clipboardData.items) || [];
+    if (currentTab === "anno" && !annoTextEdit) {   // paste an image into the Annotator
+      for (const it of items) {
+        if (it.kind === "file" && it.type.startsWith("image/")) { const f = it.getAsFile(); if (f) { loadAnnoFile(f); e.preventDefault(); } break; }
+      }
+      return;
+    }
+    if (!activePaste) return;
     for (const it of items) {
       if (it.kind === "file" && it.type.startsWith("image/")) {
         const f = it.getAsFile();
@@ -1070,7 +1117,9 @@
   const TOOLS = [["select", "Select", "1"], ["box", "▭ Box", "2"], ["arrow", "↗ Arrow", "3"], ["number", "① Number", "4"], ["text", "T Text", "5"]];
   const TOOL_KEYS = ["select", "box", "arrow", "number", "text"];
 
-  let modalEls = null;
+  let modalEls = null, inlineEls = null, editorHost = null;   // active editor host (modal or inline)
+  let currentTab = "ba";
+  const annoDoc = newSlot();                                  // the Annotator tab's single image
   let annoSlot = null, annoBtnRef = null;
   let annoWork = [], annoTool = "select", annoColor = "#ef4444";
   let annoSel = new Set();          // selected indices
@@ -1090,7 +1139,7 @@
   const D2NX = (dx) => (dx - annoImgRect.x) / annoImgRect.w;
   const D2NY = (dy) => (dy - annoImgRect.y) / annoImgRect.h;
   function evtPos(e) {
-    const r = modalEls.canvas.getBoundingClientRect();
+    const r = editorHost.canvas.getBoundingClientRect();
     return { dx: Math.max(0, Math.min(annoDispW, e.clientX - r.left)), dy: Math.max(0, Math.min(annoDispH, e.clientY - r.top)) };
   }
   function distSeg(px, py, x1, y1, x2, y2) {
@@ -1125,10 +1174,10 @@
     annoHist.push(cloneAnns(annoWork));
     if (annoHist.length > 80) annoHist.shift();
     annoHistIdx = annoHist.length - 1;
-    updateUndoRedo();
+    updateUndoRedo(); commitLive();
   }
-  function undo() { if (annoHistIdx <= 0) return; annoHistIdx--; annoWork = cloneAnns(annoHist[annoHistIdx]); setSel([]); redraw(); updateUndoRedo(); }
-  function redo() { if (annoHistIdx >= annoHist.length - 1) return; annoHistIdx++; annoWork = cloneAnns(annoHist[annoHistIdx]); setSel([]); redraw(); updateUndoRedo(); }
+  function undo() { if (annoHistIdx <= 0) return; annoHistIdx--; annoWork = cloneAnns(annoHist[annoHistIdx]); setSel([]); redraw(); updateUndoRedo(); commitLive(); }
+  function redo() { if (annoHistIdx >= annoHist.length - 1) return; annoHistIdx++; annoWork = cloneAnns(annoHist[annoHistIdx]); setSel([]); redraw(); updateUndoRedo(); commitLive(); }
 
   // ----- removal (bakes pinned arrow ends so they don't jump) -----
   function removeAnns(indices) {
@@ -1149,14 +1198,14 @@
 
   // ----- toolbar state -----
   function updateToolbar() {
-    const m = modalEls; if (!m) return;
+    const m = editorHost; if (!m) return;
     Object.entries(m.toolBtns).forEach(([id, b]) => b.classList.toggle("active", id === annoTool));
     m.canvas.classList.toggle("draw", annoTool !== "select");
     m.delBtn.disabled = annoSel.size === 0;
   }
-  function updateColors() { modalEls && modalEls.swatchEls.forEach((s) => s.classList.toggle("active", s._c === annoColor)); }
+  function updateColors() { editorHost && editorHost.swatchEls.forEach((s) => s.classList.toggle("active", s._c === annoColor)); }
   function updateUndoRedo() {
-    const m = modalEls; if (!m) return;
+    const m = editorHost; if (!m) return;
     m.undoBtn.disabled = annoHistIdx <= 0;
     m.redoBtn.disabled = annoHistIdx >= annoHist.length - 1;
     m.delBtn.disabled = annoSel.size === 0;
@@ -1189,7 +1238,7 @@
   }
 
   function redraw() {
-    const m = modalEls; if (!m || !annoSlot) return;
+    const m = editorHost; if (!m || !annoSlot) return;
     const ctx = m.ctx;
     ctx.setTransform(annoDPR, 0, 0, annoDPR, 0, 0);
     ctx.fillStyle = "#e9eef4"; ctx.fillRect(0, 0, annoDispW, annoDispH);
@@ -1243,7 +1292,7 @@
 
   // ----- inline text editing -----
   function positionTextInput(a) {
-    const inp = modalEls.input, cv = modalEls.canvas, k = annoImgRect.w / 560;
+    const inp = editorHost.input, cv = editorHost.canvas, k = annoImgRect.w / 560;
     const left = cv.offsetLeft + N2DX(a.x), top = cv.offsetTop + N2DY(a.y);
     inp.style.left = left + "px";
     inp.style.top = top + "px";
@@ -1255,7 +1304,7 @@
   }
   function startTextEdit(i, isNew) {
     annoTextEdit = { i, isNew };
-    const inp = modalEls.input;
+    const inp = editorHost.input;
     inp.value = annoWork[i].text || "";
     positionTextInput(annoWork[i]);
     inp.style.display = "block";
@@ -1263,8 +1312,8 @@
   }
   function commitTextEdit() {
     if (!annoTextEdit) return;
-    const { i } = annoTextEdit, a = annoWork[i], val = modalEls.input.value.trim();
-    annoTextEdit = null; modalEls.input.style.display = "none";
+    const { i } = annoTextEdit, a = annoWork[i], val = editorHost.input.value.trim();
+    annoTextEdit = null; editorHost.input.style.display = "none";
     if (!a) return;
     if (!val) removeAnns([i]); else a.text = val;
     pushHistory(); resetToSelect(); redraw();
@@ -1272,7 +1321,7 @@
   function cancelTextEdit() {
     if (!annoTextEdit) return;
     const { i, isNew } = annoTextEdit, a = annoWork[i];
-    annoTextEdit = null; modalEls.input.style.display = "none";
+    annoTextEdit = null; editorHost.input.style.display = "none";
     if (isNew && a && !(a.text || "").trim()) { removeAnns([i]); pushHistory(); }
     resetToSelect(); redraw();
   }
@@ -1301,11 +1350,11 @@
   }
 
   function onAnnoDown(e) {
-    e.preventDefault(); try { modalEls.canvas.setPointerCapture(e.pointerId); } catch (_) {}
+    e.preventDefault(); try { editorHost.canvas.setPointerCapture(e.pointerId); } catch (_) {}
     if (annoTextEdit) commitTextEdit();
     if (annoSpace || e.button === 1) {   // pan the plane
       annoAction = { kind: "pan", sx: e.clientX, sy: e.clientY, ox: annoImgRect.x, oy: annoImgRect.y };
-      modalEls.canvas.style.cursor = "grabbing"; return;
+      editorHost.canvas.style.cursor = "grabbing"; return;
     }
     const { dx, dy } = evtPos(e), nx = D2NX(dx), ny = D2NY(dy);
     if (annoTool === "select") {
@@ -1371,7 +1420,7 @@
   }
   function onAnnoUp() {
     const A = annoAction; if (!A) return; annoAction = null;
-    if (A.kind === "pan") { modalEls.canvas.style.cursor = annoSpace ? "grab" : ""; return; }
+    if (A.kind === "pan") { editorHost.canvas.style.cursor = annoSpace ? "grab" : ""; return; }
     if (A.kind === "draw") {
       const d = annoDraft; annoDraft = null;
       const ok = d.type === "box" ? (d.w > 0.01 && d.h > 0.01) : (Math.hypot(d.x2 - d.x1, d.y2 - d.y1) > 0.015);
@@ -1385,9 +1434,10 @@
     if (A.kind === "move") { pushHistory(); redraw(); return; }
   }
 
-  function ensureModal() {
-    if (modalEls) return modalEls;
-    const canvas = h("canvas", { id: "annoCanvas" });
+  // Build the shared editor chrome (toolbar + canvas + inline text input), wired to the shared
+  // handlers which read/write the active `editorHost`. Used by both the modal and the inline tab.
+  function makeEditorUI() {
+    const canvas = h("canvas", { class: "anno-canvas" });
     const input = h("textarea", { class: "anno-input", rows: "1", style: "display:none" });
     input.addEventListener("keydown", (e) => {
       e.stopPropagation();   // Enter adds a newline; ⌘/Ctrl+Enter or click-away commits
@@ -1417,16 +1467,6 @@
     const fitBtn = h("button", { class: "tool", title: "Fit image to view", onclick: () => { fitView(); redraw(); } }, "⤢ Fit");
     const zoomInBtn = h("button", { class: "tool", title: "Zoom in", onclick: () => zoomBy(1.25) }, "+");
     toolbar.append(undoBtn, redoBtn, delBtn, clrBtn, h("span", { class: "sep" }), zoomOutBtn, fitBtn, zoomInBtn);
-    const foot = h("div", { class: "modal-foot" },
-      h("span", { class: "modal-hint" }, "scroll to pan · ⌃scroll / pinch to zoom · space-drag to pan · drag to draw or box-select · double-click a label to edit"),
-      h("div", { style: "display:flex;gap:8px" },
-        h("button", { onclick: () => closeAnnotator(false) }, "Cancel"),
-        h("button", { class: "primary", onclick: () => closeAnnotator(true) }, "Done"),
-      ),
-    );
-    const modal = h("div", { class: "modal" }, toolbar, h("div", { class: "modal-canvas-wrap" }, canvas, input), foot);
-    const backdrop = h("div", { class: "modal-backdrop", onclick: (e) => { if (e.target === backdrop) closeAnnotator(false); } }, modal);
-    document.body.append(backdrop);
     canvas.addEventListener("pointerdown", onAnnoDown);
     canvas.addEventListener("pointermove", onAnnoMove);
     canvas.addEventListener("pointerup", onAnnoUp);
@@ -1436,15 +1476,37 @@
       const { dx, dy } = evtPos(e);
       for (let i = annoWork.length - 1; i >= 0; i--) { if (annoWork[i].type === "text" && annoHit(annoWork[i], dx, dy)) { setSel([i]); startTextEdit(i, false); redraw(); return; } }
     });
-    modalEls = { backdrop, canvas, input, ctx: canvas.getContext("2d"), toolBtns, swatchEls, undoBtn, redoBtn, delBtn };
+    return { canvas, input, toolbar, toolBtns, swatchEls, undoBtn, redoBtn, delBtn, ctx: canvas.getContext("2d") };
+  }
+  function ensureModal() {
+    if (modalEls) return modalEls;
+    const ui = makeEditorUI();
+    const foot = h("div", { class: "modal-foot" },
+      h("span", { class: "modal-hint" }, "scroll to pan · ⌃scroll / pinch to zoom · space-drag to pan · drag to draw or box-select · double-click a label to edit"),
+      h("div", { style: "display:flex;gap:8px" },
+        h("button", { onclick: () => closeAnnotator(false) }, "Cancel"),
+        h("button", { class: "primary", onclick: () => closeAnnotator(true) }, "Done"),
+      ),
+    );
+    const modal = h("div", { class: "modal" }, ui.toolbar, h("div", { class: "modal-canvas-wrap" }, ui.canvas, ui.input), foot);
+    const backdrop = h("div", { class: "modal-backdrop", onclick: (e) => { if (e.target === backdrop) closeAnnotator(false); } }, modal);
+    document.body.append(backdrop);
+    modalEls = Object.assign({ mode: "modal", backdrop }, ui);
     return modalEls;
+  }
+  function ensureInline() {
+    if (inlineEls) return inlineEls;
+    const ui = makeEditorUI();
+    document.getElementById("annoEditor").append(ui.toolbar, h("div", { class: "modal-canvas-wrap", style: "border-radius:14px" }, ui.canvas, ui.input));
+    inlineEls = Object.assign({ mode: "inline", live: true }, ui);
+    return inlineEls;
   }
 
   // The editor is a fixed-size viewport onto an infinite plane. annoImgRect is the image's
   // on-screen rect, so panning translates it and zooming scales it about a point. Annotations
   // (normalized to the image) map through annoImgRect, so they pan/zoom with it for free.
   function setViewport() {
-    const m = modalEls;
+    const m = editorHost;
     annoDispW = Math.round(Math.min(window.innerWidth - 80, 1100));
     annoDispH = Math.round(window.innerHeight * 0.62);
     annoDPR = window.devicePixelRatio || 1;
@@ -1465,24 +1527,27 @@
   function zoomBy(f) { zoomAt(annoDispW / 2, annoDispH / 2, f); redraw(); }
   function onAnnoWheel(e) {
     e.preventDefault();
-    const r = modalEls.canvas.getBoundingClientRect();
+    const r = editorHost.canvas.getBoundingClientRect();
     if (e.ctrlKey) zoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(-e.deltaY * 0.01));  // pinch / ⌃scroll
     else { annoImgRect.x -= e.deltaX; annoImgRect.y -= e.deltaY; }                              // two-finger / wheel pan
     redraw();
   }
 
-  function openAnnotator(slot, btn) {
-    if (!slot.img) return;
-    const m = ensureModal();
-    annoSlot = slot; annoBtnRef = btn;
+  // shared setup for either host
+  function startEditing(slot) {
+    annoSlot = slot;
     annoWork = cloneAnns(slot.annotations); annoWork.forEach((a) => { if (!a.id) a.id = uid(); });
     annoTool = "select"; annoColor = "#ef4444"; setSel([]); annoDraft = null; annoAction = null; annoTextEdit = null; annoSpace = false;
     annoHist = []; annoHistIdx = -1; pushHistory();
-    setViewport();
-    fitView();
-    m.input.style.display = "none";
-    m.backdrop.classList.add("open");
+    setViewport(); fitView();
+    editorHost.input.style.display = "none";
     updateToolbar(); updateColors(); updateUndoRedo(); redraw();
+  }
+  function openAnnotator(slot, btn) {   // modal (Before/After "Annotate")
+    if (!slot.img) return;
+    editorHost = ensureModal(); annoBtnRef = btn;
+    startEditing(slot);
+    editorHost.backdrop.classList.add("open");
   }
   function closeAnnotator(commit) {
     if (!modalEls) return;
@@ -1493,21 +1558,106 @@
       if (annoBtnRef) annoBtnRef.textContent = annoLabel(annoSlot);
       drawPreview();
     }
-    annoSlot = null; annoBtnRef = null;
+    annoSlot = null; annoBtnRef = null; editorHost = null;
   }
+  function openInline() {               // Annotator tab (live editing)
+    if (!annoDoc.img) return;
+    editorHost = ensureInline(); annoBtnRef = null;
+    startEditing(annoDoc);
+  }
+  // in the inline tab, edits apply to the document immediately (no Done step)
+  function commitLive() { if (editorHost && editorHost.live && annoSlot) { annoSlot.annotations = cloneAnns(annoWork); scheduleSave(); } }
+
   document.addEventListener("keydown", (e) => {
-    if (!modalEls || !modalEls.backdrop.classList.contains("open") || annoTextEdit) return;
-    if (e.key === "Escape") closeAnnotator(false);
-    else if (e.key === "Enter") closeAnnotator(true);
+    if (!editorHost || annoTextEdit) return;
+    if (e.key === "Escape") { editorHost.mode === "modal" ? closeAnnotator(false) : (setSel([]), redraw()); }
+    else if (e.key === "Enter") { if (editorHost.mode === "modal") closeAnnotator(true); }
     else if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); deleteSel(); }
     else if ((e.metaKey || e.ctrlKey) && (e.key === "z" || e.key === "Z")) { e.preventDefault(); e.shiftKey ? redo() : undo(); }
     else if ((e.metaKey || e.ctrlKey) && (e.key === "y" || e.key === "Y")) { e.preventDefault(); redo(); }
     else if (e.key >= "1" && e.key <= "5" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); setTool(TOOL_KEYS[+e.key - 1]); }
-    else if (e.key === " ") { e.preventDefault(); annoSpace = true; if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); modalEls.canvas.style.cursor = "grab"; }
+    else if (e.key === " ") { e.preventDefault(); annoSpace = true; if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); editorHost.canvas.style.cursor = "grab"; }
   });
   document.addEventListener("keyup", (e) => {
-    if (e.key === " " && annoSpace) { annoSpace = false; if (modalEls && (!annoAction || annoAction.kind !== "pan")) modalEls.canvas.style.cursor = ""; }
+    if (e.key === " " && annoSpace) { annoSpace = false; if (editorHost && (!annoAction || annoAction.kind !== "pan")) editorHost.canvas.style.cursor = ""; }
   });
+
+  // ---------- Annotator tab ----------
+  function setAnnoImage(dataUrl) {
+    const img = new Image();
+    img.onload = () => { annoDoc.img = img; annoDoc.dataUrl = dataUrl; annoDoc.w = img.naturalWidth; annoDoc.h = img.naturalHeight; if (currentTab === "anno") enterAnnotator(); scheduleSave(); };
+    img.src = dataUrl;
+  }
+  function loadAnnoFile(file) { if (!file || !file.type.startsWith("image/")) return; const r = new FileReader(); r.onload = () => setAnnoImage(r.result); r.readAsDataURL(file); }
+  function enterAnnotator() {
+    const hasImg = !!annoDoc.img;
+    document.getElementById("annoDrop").hidden = hasImg;
+    document.getElementById("annoEditor").hidden = !hasImg;
+    document.getElementById("annoFoot").hidden = !hasImg;
+    if (hasImg) openInline(); else editorHost = null;
+  }
+  function leaveAnnotator() { if (annoTextEdit) commitTextEdit(); if (editorHost && editorHost.mode === "inline") editorHost = null; }
+  function showTab(t) {
+    currentTab = t === "anno" ? "anno" : "ba";
+    document.getElementById("tab-ba").hidden = currentTab !== "ba";
+    document.getElementById("tab-anno").hidden = currentTab !== "anno";
+    document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === currentTab));
+    currentTab === "anno" ? enterAnnotator() : leaveAnnotator();
+    scheduleSave();
+  }
+
+  // ---- Annotator export: the single image with annotations baked in ----
+  function annotatedCanvas(fmt) {
+    const slot = annoDoc, S = 2, ext = annsExtent(slot.annotations);
+    const W = (ext.x1 - ext.x0) * slot.w, H = (ext.y1 - ext.y0) * slot.h;
+    const cv = document.createElement("canvas");
+    cv.width = Math.max(1, Math.round(W * S)); cv.height = Math.max(1, Math.round(H * S));
+    const ctx = cv.getContext("2d"); ctx.setTransform(S, 0, 0, S, 0, 0);
+    if (fmt !== "png") { ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, W, H); }   // jpeg/webp need an opaque bg
+    const ix = (0 - ext.x0) * slot.w, iy = (0 - ext.y0) * slot.h;
+    ctx.drawImage(slot.img, ix, iy, slot.w, slot.h);
+    drawAnnotations(ctx, { x: ix, y: iy, w: slot.w, h: slot.h }, slot.annotations);
+    return cv;
+  }
+  function annotatedSVG() {
+    const slot = annoDoc, ext = annsExtent(slot.annotations);
+    const W = (ext.x1 - ext.x0) * slot.w, H = (ext.y1 - ext.y0) * slot.h;
+    const ix = (0 - ext.x0) * slot.w, iy = (0 - ext.y0) * slot.h;
+    const rect = { x: ix, y: iy, w: slot.w, h: slot.h }, byId = buildById(slot.annotations);
+    const out = [`<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`];
+    out.push(`<image x="${ix}" y="${iy}" width="${slot.w}" height="${slot.h}" preserveAspectRatio="none" xlink:href="${slot.img.src}"/>`);
+    slot.annotations.forEach((a) => annoPrimitives(rect, resolveForRender(a, byId)).forEach((p) => out.push(svgPrim(p))));
+    out.push("</svg>");
+    return out.join("");
+  }
+  function annoExportDownload(fmt) {
+    if (!annoDoc.img) return;
+    if (fmt === "svg") { downloadBlob(new Blob([annotatedSVG()], { type: "image/svg+xml" }), "annotated.svg"); return; }
+    annotatedCanvas(fmt).toBlob((b) => b && downloadBlob(b, `annotated.${EXT[fmt]}`), RASTER[fmt], fmt === "png" ? undefined : 0.92);
+  }
+  async function annoExportCopy(fmt) {
+    if (!annoDoc.img) return;
+    try {
+      if (fmt === "svg") { await navigator.clipboard.writeText(annotatedSVG()); toast("Copied SVG markup"); return; }
+      const blob = await blobFromCanvas(annotatedCanvas(fmt), RASTER[fmt], fmt === "png" ? undefined : 0.92);
+      await navigator.clipboard.write([new ClipboardItem({ [RASTER[fmt]]: blob })]);
+      toast(`Copied ${fmt.toUpperCase()} to clipboard`);
+    } catch (e) { toast(fmt === "png" ? "Copy failed" : "Copy failed — browser may only allow PNG"); }
+  }
+  function buildAnnoActions() {
+    const bar = document.getElementById("annoActions"); bar.innerHTML = "";
+    bar.append(
+      dropdown("⧉ Copy", "", [{ items: COPY_FORMATS.map(([f, l]) => ({ label: l, onClick: () => annoExportCopy(f) })) }]),
+      dropdown("⬇ Download", "primary", [{ items: DL_FORMATS.map(([f, l]) => ({ label: l, onClick: () => annoExportDownload(f) })) }]),
+    );
+  }
+  function hydrateAnno() {
+    if (annoDoc.dataUrl && !annoDoc.img) {
+      const img = new Image();
+      img.onload = () => { annoDoc.img = img; annoDoc.w = img.naturalWidth; annoDoc.h = img.naturalHeight; if (currentTab === "anno") enterAnnotator(); };
+      img.src = annoDoc.dataUrl;
+    }
+  }
 
   // ---------- global controls ----------
   const bind = (id, fn) => document.getElementById(id).addEventListener("input", fn);
@@ -1539,12 +1689,25 @@
     document.querySelectorAll(".img-col.after .col-tag").forEach((e) => e.textContent = state.afterLabel || "After");
   }
 
+  // ---------- tab + annotator wiring ----------
+  document.querySelectorAll(".tab").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
+  const annoFile = document.getElementById("annoFile");
+  document.getElementById("annoBrowse").addEventListener("click", () => annoFile.click());
+  document.getElementById("annoReplace").addEventListener("click", () => annoFile.click());
+  annoFile.addEventListener("change", (e) => { loadAnnoFile(e.target.files[0]); e.target.value = ""; });
+  const annoDrop = document.getElementById("annoDrop");
+  annoDrop.addEventListener("dragover", (e) => { e.preventDefault(); annoDrop.classList.add("drag"); });
+  annoDrop.addEventListener("dragleave", () => annoDrop.classList.remove("drag"));
+  annoDrop.addEventListener("drop", (e) => { e.preventDefault(); annoDrop.classList.remove("drag"); loadAnnoFile(e.dataTransfer.files[0]); });
+
   // ---------- init ----------
   const restored = loadSaved();
   syncControls();
   buildBarActions();
+  buildAnnoActions();
   buildEditor();
-  if (restored) hydrateImages();
+  if (restored) { hydrateImages(); hydrateAnno(); }
+  showTab(currentTab);
   drawPreview();
 })();
 </script>
