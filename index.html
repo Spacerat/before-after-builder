@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Before / After Builder</title>
+<title>Before / After &amp; Annotator — screenshot tools</title>
 <style>
   :root{
     --bg:#f1f5f9; --panel:#ffffff; --ink:#0f172a; --muted:#64748b;
@@ -17,9 +17,8 @@
     background:var(--bg); color:var(--ink);
     padding:24px;
   }
-  header{max-width:1400px;margin:0 auto 20px}
-  header h1{margin:0;font-size:24px;letter-spacing:-.01em}
-  header .sub{margin:4px 0 0;color:var(--muted)}
+  .sub{max-width:1400px;margin:2px auto 20px;color:var(--muted)}
+  .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);border:0}
   .app{
     max-width:1400px;margin:0 auto;display:grid;gap:24px;
     grid-template-columns:minmax(380px,1fr) minmax(420px,1.15fr);
@@ -136,7 +135,7 @@
   .anno-canvas{display:block;background:#fff;border-radius:6px;box-shadow:0 4px 18px rgba(0,0,0,.15);touch-action:none}
   .anno-canvas.draw{cursor:crosshair}
 
-  .tabs{max-width:1400px;margin:0 auto 18px;display:flex;gap:4px;border-bottom:1px solid var(--line)}
+  .tabs{max-width:1400px;margin:0 auto 10px;display:flex;gap:4px;border-bottom:1px solid var(--line)}
   .tab{border:none;background:transparent;padding:10px 16px;font-weight:700;color:var(--muted);border-radius:0;border-bottom:2px solid transparent;margin-bottom:-1px}
   .tab:hover{background:transparent;color:var(--ink)}
   .tab.active{color:var(--accent);border-bottom-color:var(--accent)}
@@ -165,15 +164,12 @@
 </style>
 </head>
 <body>
-<header>
-  <h1>Before / After Builder</h1>
-  <p class="sub">Compose before/after screenshots into a single shareable PNG — entirely in your browser, nothing uploaded.</p>
-</header>
-
+<h1 class="sr-only" id="modeTitle">Before / After Builder</h1>
 <nav class="tabs">
   <button class="tab active" data-tab="ba">◧ Before / After</button>
   <button class="tab" data-tab="anno">✎ Annotator</button>
 </nav>
+<p class="sub" id="modeSub">Compose before/after screenshots into a single shareable PNG — entirely in your browser, nothing uploaded.</p>
 
 <div id="tab-ba">
 <div class="app">
@@ -1597,11 +1593,17 @@
     if (hasImg) openInline(); else editorHost = null;
   }
   function leaveAnnotator() { if (annoTextEdit) commitTextEdit(); if (editorHost && editorHost.mode === "inline") editorHost = null; }
+  const TAB_INFO = {
+    ba: { title: "Before / After Builder", sub: "Compose before/after screenshots into a single shareable PNG — entirely in your browser, nothing uploaded." },
+    anno: { title: "Annotator", sub: "Annotate a screenshot with boxes, arrows, numbers and labels, then export it — entirely in your browser, nothing uploaded." },
+  };
   function showTab(t) {
     currentTab = t === "anno" ? "anno" : "ba";
     document.getElementById("tab-ba").hidden = currentTab !== "ba";
     document.getElementById("tab-anno").hidden = currentTab !== "anno";
     document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === currentTab));
+    document.getElementById("modeTitle").textContent = TAB_INFO[currentTab].title;
+    document.getElementById("modeSub").textContent = TAB_INFO[currentTab].sub;
     currentTab === "anno" ? enterAnnotator() : leaveAnnotator();
     scheduleSave();
   }
