@@ -10,7 +10,9 @@ Fully vibecoded! Only this README section was written by hand.
 
 A single, dependency-free HTML file (`index.html`) with two tools, switchable via tabs. Everything runs in your browser — no server, no build step, no uploads.
 
-**Live:** https://veryjoe.com/screenshot-tools/
+Each tool has its own URL via hash routing, so you can deep-link or share a link straight to a tool: `#/before-after` and `#/annotator`. (No server config needed — it stays a single static file.)
+
+**Live:** https://veryjoe.com/screenshot-tools/ ([Annotator](https://veryjoe.com/screenshot-tools/#/annotator))
 
 ## Before / After
 

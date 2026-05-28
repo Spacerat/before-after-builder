@@ -166,8 +166,8 @@
 <body>
 <h1 class="sr-only" id="modeTitle">Before / After Builder</h1>
 <nav class="tabs">
-  <button class="tab active" data-tab="ba">◧ Before / After</button>
-  <button class="tab" data-tab="anno">✎ Annotator</button>
+  <button class="tab active" data-tab="anno">✎ Annotator</button>
+  <button class="tab" data-tab="ba">◧ Before / After</button>
 </nav>
 <p class="sub" id="modeSub">Compose before/after screenshots into a single shareable PNG — entirely in your browser, nothing uploaded.</p>
 
@@ -1597,6 +1597,16 @@
     ba: { title: "Before / After Builder", sub: "Compose before/after screenshots into a single shareable PNG — entirely in your browser, nothing uploaded." },
     anno: { title: "Annotator", sub: "Annotate a screenshot with boxes, arrows, numbers and labels, then export it — entirely in your browser, nothing uploaded." },
   };
+  // ---------- hash routing: each tool gets its own URL (#/before-after, #/annotator) ----------
+  const TAB_SLUG = { ba: "before-after", anno: "annotator" };
+  const slugToTab = (s) => (s === "annotator" ? "anno" : s === "before-after" ? "ba" : null);
+  const tabFromHash = () => slugToTab(location.hash.replace(/^#\/?/, ""));
+  // Navigate to a tab by updating the URL; the hashchange listener applies it (so back/forward work).
+  function navTo(t) {
+    const want = "#/" + TAB_SLUG[t === "anno" ? "anno" : "ba"];
+    if (location.hash === want) showTab(t);   // hash already correct → no hashchange fires, apply directly
+    else location.hash = want;                // changing the hash triggers hashchange → showTab
+  }
   function showTab(t) {
     currentTab = t === "anno" ? "anno" : "ba";
     document.getElementById("tab-ba").hidden = currentTab !== "ba";
@@ -1692,7 +1702,8 @@
   }
 
   // ---------- tab + annotator wiring ----------
-  document.querySelectorAll(".tab").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
+  document.querySelectorAll(".tab").forEach((b) => b.addEventListener("click", () => navTo(b.dataset.tab)));
+  window.addEventListener("hashchange", () => showTab(tabFromHash() || currentTab));
   const annoFile = document.getElementById("annoFile");
   document.getElementById("annoBrowse").addEventListener("click", () => annoFile.click());
   document.getElementById("annoReplace").addEventListener("click", () => annoFile.click());
@@ -1709,7 +1720,11 @@
   buildAnnoActions();
   buildEditor();
   if (restored) { hydrateImages(); hydrateAnno(); }
-  showTab(currentTab);
+  // The URL hash (if any) wins over the saved tab — so a shared #/annotator link opens the right tool.
+  const initialTab = tabFromHash() || currentTab;
+  const wantHash = "#/" + TAB_SLUG[initialTab];
+  if (location.hash !== wantHash) history.replaceState(null, "", wantHash);   // canonicalize without adding history
+  showTab(initialTab);
   drawPreview();
 })();
 </script>
