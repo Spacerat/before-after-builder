@@ -946,6 +946,15 @@
     if (c.length === 3) c = c.split("").map((x) => x + x).join("");
     return `rgba(${parseInt(c.slice(0, 2), 16) || 0},${parseInt(c.slice(2, 4), 16) || 0},${parseInt(c.slice(4, 6), 16) || 0},${a})`;
   }
+  // normalize to a 6-digit lowercase hex (no #) for comparison
+  const normHex = (hex) => { let c = String(hex || "").replace("#", "").toLowerCase(); if (c.length === 3) c = c.split("").map((x) => x + x).join(""); return c; };
+  const sameColor = (a, b) => normHex(a) === normHex(b);
+  // shift a color toward black (f<0) or white (f>0), |f| in 0..1, for a distinguishable shade
+  function shade(hex, f) {
+    const c = normHex(hex), hx = (v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, "0");
+    const adj = (v) => f < 0 ? v * (1 + f) : v + (255 - v) * f;
+    return "#" + hx(adj(parseInt(c.slice(0, 2), 16) || 0)) + hx(adj(parseInt(c.slice(2, 4), 16) || 0)) + hx(adj(parseInt(c.slice(4, 6), 16) || 0));
+  }
   // resolve a text label's display style. size: 560-space px (default 22). bg: color or "none".
   // fg: color or "auto" (contrasts the bg, or near-black on no bg). No bg → a contrasting halo
   // keeps text legible on any image (applies to explicit fg too, not just auto).
@@ -955,6 +964,8 @@
     const hasBg = !!bg && bg !== "none";
     let fg = a.fg !== undefined ? a.fg : "auto";
     if (fg === "auto") fg = hasBg ? (hexLum(bg) > 0.6 ? "#111827" : "#ffffff") : "#111827";
+    // same color for text and its background → shade the text so it stays legible
+    if (hasBg && sameColor(fg, bg)) fg = hexLum(bg) > 0.5 ? shade(bg, -0.55) : shade(bg, 0.6);
     const light = hexLum(fg) > 0.72;   // only near-white text needs a dark halo; colored text reads better with a white glow
     return { size, bg, fg, hasBg, halo: !hasBg, haloColor: light ? "#000000" : "#ffffff", haloOpacity: light ? 0.5 : 0.85 };
   }
